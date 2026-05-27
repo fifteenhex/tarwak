@@ -28,13 +28,24 @@ struct context {
 	struct group_map *groupmap;
 	unsigned int numgroups;
 	struct archive *tarball;
+	#define CONTEXT_BUFFSZ (1024 * 1024)
+	void *buff;
 };
 
+/* Clean up helpers */
 static void free_archive(struct archive **a)
 {
 	if (*a)
 		archive_write_free(*a);
 }
+
+static void free_archive_entry(struct archive_entry **entry)
+{
+	if (*entry)
+		archive_entry_free(*entry);
+}
+
+#define __cleanup_archive_entry __attribute__((cleanup(free_archive_entry)))
 
 static void free_file(FILE **f)
 {
@@ -42,10 +53,24 @@ static void free_file(FILE **f)
 		fclose(*f);
 }
 
+#define __cleanup_file __attribute__((cleanup(free_file)))
+
 static void free_malloc(void **p)
 {
 	if (*p)
 		free(*p);
+}
+
+/* Util functions */
+static inline long file_len(FILE *f)
+{
+	long len;
+
+	fseek(f, 0, SEEK_END);
+	len = ftell(f);
+	rewind(f);
+
+	return len;
 }
 
 static void usage(const char *prog)
@@ -161,7 +186,7 @@ static int parse_root(const cJSON *config, const cJSON **rootentries,
 
 static int parse_config(const char *config_path, cJSON **result)
 {
-	FILE __attribute__((cleanup(free_file))) *config_file = NULL;
+	FILE __cleanup_file *config_file = NULL;
 	void __attribute__((cleanup(free_malloc))) *config_buf = NULL;
 	long config_len;
 	cJSON *config;
@@ -173,9 +198,7 @@ static int parse_config(const char *config_path, cJSON **result)
 		return -1;
 	}
 
-	fseek(config_file, 0, SEEK_END);
-	config_len = ftell(config_file);
-	rewind(config_file);
+	config_len = file_len(config_file);
 
 	config_buf = malloc(config_len + 1);
 	if (!config_buf)
@@ -202,14 +225,83 @@ static int parse_config(const char *config_path, cJSON **result)
 
 static int traverse_entries(struct context *context, const cJSON *entries, const char *path);
 
-static int do_regular(const cJSON *node)
+static int add_file(struct context *context, const char *path,
+		    size_t data_len, int (*read_data)(void *dst, size_t len, void *priv), void *read_data_priv)
 {
+	struct archive_entry __cleanup_archive_entry *entry = NULL;
+
+	entry = archive_entry_new();
+	archive_entry_set_pathname(entry, path);
+	archive_entry_set_filetype(entry, AE_IFREG);
+	archive_entry_set_perm(entry, 0644);
+	archive_entry_set_size(entry, data_len);
+
+	if (archive_write_header(context->tarball, entry) != ARCHIVE_OK) {
+		fprintf(stderr, "Failed to add file\n");
+		return -1;
+	}
+
+	while (data_len) {
+		size_t read_len = CONTEXT_BUFFSZ;
+		int ret;
+
+		if (read_len > data_len)
+			read_len = data_len;
+
+		ret = read_data(context->buff, read_len, read_data_priv);
+		if (ret <= 0)
+			return -EIO;
+
+		ret = archive_write_data(context->tarball, context->buff, ret);
+		if (ret < 0)
+			return -EIO;
+
+		data_len -= ret;
+	}
+
 	return 0;
+}
+
+static int read_file(void *dst, size_t len, void *priv)
+{
+	FILE *f = (FILE *) priv;
+
+	return fread(dst, 1, len, f);
+}
+
+static int do_regular(struct context *context, const cJSON *node, const char *cwd)
+{
+	FILE __cleanup_file *f = NULL;
+	const cJSON *source;
+	char path[PATH_MAX];
+	const char *source_path;
+	const char *name;
+	long len;
+
+	name = node->string;
+	snprintf(path, sizeof(path), "%s%s", cwd, name);
+
+	source = cJSON_GetObjectItemCaseSensitive(node, "source");
+	if (!cJSON_IsString(source)) {
+		fprintf(stderr, "file '%s' missing 'source'\n", node->string);
+		return -EINVAL;
+	}
+
+	source_path = source->valuestring;
+	f = fopen(source_path, "rb");
+	if (!f) {
+		fprintf(stderr, "failed to open '%s'\n", source_path);
+		return -1;
+	}
+
+	len = file_len(f);
+
+	return add_file(context, path, len, read_file, f);
 }
 
 static int add_dir(struct context *context, const char *path)
 {
-	struct archive_entry *entry;
+	struct archive_entry __cleanup_archive_entry *entry = NULL;
 	int ret;
 
 	entry = archive_entry_new();
@@ -217,7 +309,6 @@ static int add_dir(struct context *context, const char *path)
 	archive_entry_set_filetype(entry, AE_IFDIR);
 	archive_entry_set_perm(entry, 0755);
 	ret = archive_write_header(context->tarball, entry);
-	archive_entry_free(entry);
 
 	if (ret != ARCHIVE_OK)
 		return -1;
@@ -277,7 +368,7 @@ static int traverse_entries(struct context *context, const cJSON *entries, const
 				return ret;
 		}
 		else if (strcmp(type_str, "regular") == 0) {
-			ret = do_regular(node);
+			ret = do_regular(context, node, path);
 			if (ret)
 				return ret;
 		}
@@ -354,6 +445,10 @@ int main(int argc, char **argv)
 	}
 
 	/* Gets real here! */
+	context.buff = malloc(CONTEXT_BUFFSZ);
+	if (!context.buff)
+		return 1;
+
 	context.tarball = tarball;
 	traverse_entries(&context, entries, "/");
 
