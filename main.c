@@ -62,6 +62,8 @@ static void free_malloc(void **p)
 }
 
 /* Util functions */
+#define ARRAY_SZ(_a) (sizeof(_a) / sizeof(_a[0]))
+
 static inline long file_len(FILE *f)
 {
 	long len;
@@ -223,6 +225,38 @@ static int parse_config(const char *config_path, cJSON **result)
 	return 0;
 }
 
+static int add_symlink(struct context *context, const char *path, const char *target)
+{
+	struct archive_entry __cleanup_archive_entry *entry = NULL;
+
+	entry = archive_entry_new();
+	archive_entry_set_pathname(entry, path);
+	archive_entry_set_filetype(entry, AE_IFLNK);
+	archive_entry_set_symlink(entry, target);
+	archive_entry_set_perm(entry, 0777);
+
+	if (archive_write_header(context->tarball, entry) != ARCHIVE_OK)
+		return -1;
+
+	return 0;
+}
+
+static int do_symlink(struct context *context, const cJSON *node, const char *cwd)
+{
+	const cJSON *target;
+	char path[PATH_MAX];
+
+	target = cJSON_GetObjectItemCaseSensitive(node, "target");
+	if (!cJSON_IsString(target)) {
+		fprintf(stderr, "symlink '%s' missing 'target'\n", node->string);
+		return -EINVAL;
+	}
+
+	snprintf(path, sizeof(path), "%s%s", cwd, node->string);
+
+	return add_symlink(context, path, target->valuestring);
+}
+
 static int traverse_entries(struct context *context, const cJSON *entries, const char *path);
 
 static int add_file(struct context *context, const char *path,
@@ -338,17 +372,31 @@ static int do_dir(struct context *context, const cJSON *node, const char *cwd)
 	return 0;
 }
 
+struct entry_handler {
+	const char* type;
+	int (*cb)(struct context *context, const cJSON *node, const char *cwd);
+};
+
+static const struct entry_handler entry_handlers[] = {
+	{ "dir", do_dir },
+	{ "regular", do_regular },
+	{ "symlink", do_symlink },
+};
+
 static int traverse_entries(struct context *context, const cJSON *entries, const char *path)
 {
 	const char *type_str;
 	const cJSON *node;
 	const cJSON *type;
 	int ret;
+	int i;
 
 	cJSON_ArrayForEach(node, entries) {
+		bool handled = false;
+
 		type = cJSON_GetObjectItemCaseSensitive(node, "type");
 
-		if (type){
+		if (type) {
 			if (!cJSON_IsString(type)) {
 				fprintf(stderr, "Entry '%s' missing 'type'\n", node->string);
 				return -EINVAL;
@@ -362,17 +410,19 @@ static int traverse_entries(struct context *context, const cJSON *entries, const
 
 		printf("%s (%s)\n", node->string, type_str);
 
-		if (strcmp(type_str, "dir") == 0) {
-			ret = do_dir(context, node, path);
-			if (ret)
-				return ret;
+		for (i = 0; i < ARRAY_SZ(entry_handlers); i++) {
+			if (strcmp(type_str, entry_handlers[i].type) == 0) {
+				ret = entry_handlers[i].cb(context, node, path);
+				if (ret)
+					return ret;
+
+				handled = true;
+
+				break;
+			}
 		}
-		else if (strcmp(type_str, "regular") == 0) {
-			ret = do_regular(context, node, path);
-			if (ret)
-				return ret;
-		}
-		else {
+
+		if (!handled) {
 			fprintf(stderr, "Unknown type '%s'\n", type_str);
 			return -EINVAL;
 		}
