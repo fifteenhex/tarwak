@@ -6,5 +6,13 @@
   "groups": {
     "kewldoods": 1000,
     "lusers": 1001
+  },
+  "root": {
+        "user": "jim",
+        "group": "lusers",
+        "mode": "0755",
+	"entries": {
+
+        }
   }
 }

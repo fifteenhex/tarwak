@@ -120,6 +120,28 @@ static int parse_groups(const cJSON *config, struct group_map **groupmap, int *n
 	return 0;
 }
 
+static int parse_root(const cJSON *config, const cJSON **rootentries,
+		      const char **defaultuser, const char **defaultgroup)
+{
+	const cJSON *root, *entries;
+
+	root = cJSON_GetObjectItemCaseSensitive(config, "root");
+	if (!cJSON_IsObject(root)) {
+		fprintf(stderr, "Missing or invalid 'root' node\n");
+		return -EINVAL;
+	}
+
+	entries = cJSON_GetObjectItemCaseSensitive(root, "entries");
+	if (!cJSON_IsObject(entries)) {
+		fprintf(stderr, "Missing or invalid 'entries' node\n");
+		return -EINVAL;
+	}
+
+	*rootentries = entries;
+
+	return 0;
+}
+
 static int parse_config(const char *config_path, cJSON **result)
 {
 	FILE __attribute__((cleanup(free_file))) *config_file = NULL;
@@ -170,6 +192,8 @@ int main(int argc, char **argv)
 	struct group_map *groupmap;
 	struct user_map *usermap;
 	int opt, ret, numusers, numgroups;
+	const char *defaultuser, *defaultgroup;
+	const cJSON *entries;
 	cJSON *config_json;
 
 	while ((opt = getopt(argc, argv, "i:o:b:")) != -1) {
@@ -194,6 +218,7 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
+	/* Config initial parsing */
 	ret = parse_config(input, &config_json);
 	if (ret)
 		return 1;
@@ -206,6 +231,11 @@ int main(int argc, char **argv)
 	if (ret)
 		return 1;
 
+	ret = parse_root(config_json, &entries, &defaultuser, &defaultgroup);
+	if (ret)
+		return 1;
+
+	/* Warm up a tarball */
 	tarball = archive_write_new();
 	archive_write_set_format_pax_restricted(tarball);
 	archive_write_add_filter_none(tarball);
@@ -215,6 +245,10 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
+	/* Gets real here! */
+
+
+	/* Pack it up! */
 	archive_write_close(tarball);
 
 	return 0;
