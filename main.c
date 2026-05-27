@@ -58,16 +58,20 @@ static int parse_users(const cJSON *config, struct user_map **usermap, int *numu
 	struct user_map *map;
 	const cJSON *users;
 	const cJSON *entry;
-	int count;
+	int count = 0;
 	int i;
 
 	users = cJSON_GetObjectItemCaseSensitive(config, "users");
-	if (!cJSON_IsObject(users)) {
-		fprintf(stderr, "Missing or invalid 'users' node\n");
-		return -EINVAL;
+	if (cJSON_IsObject(users))
+		count = cJSON_GetArraySize(users);
+
+	/* No user mapping is fine, everything is root */
+	if (!count) {
+		fprintf(stderr, "No users, everything will be owned by root\n");
+		*usermap = NULL;
+		*numusers = 0;
 	}
 
-	count = cJSON_GetArraySize(users);
 	map = calloc(count, sizeof(*map));
 	if (!map)
 		return -ENOMEM;
@@ -96,16 +100,20 @@ static int parse_groups(const cJSON *config, struct group_map **groupmap, int *n
 	struct group_map *map;
 	const cJSON *groups;
 	const cJSON *entry;
-	int count;
+	int count = 0;
 	int i;
 
 	groups = cJSON_GetObjectItemCaseSensitive(config, "groups");
-	if (!cJSON_IsObject(groups)) {
-		fprintf(stderr, "Missing or invalid 'groups' node\n");
-		return -EINVAL;
+	if (cJSON_IsObject(groups))
+		count = cJSON_GetArraySize(groups);
+
+	/* no group map is fine */
+	if (!count) {
+		fprintf(stderr, "No groups, everything will be owned by root\n");
+		*groupmap = NULL;
+		*numgroups = 0;
 	}
 
-	count = cJSON_GetArraySize(groups);
 	map = calloc(count, sizeof(*map));
 	if (!map)
 		return -ENOMEM;
