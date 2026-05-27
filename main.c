@@ -1,3 +1,4 @@
+#include <limits.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +20,14 @@ struct user_map {
 struct group_map {
 	char *name;
 	gid_t gid;
+};
+
+struct context {
+	struct user_map *usermap;
+	unsigned int numusers;
+	struct group_map *groupmap;
+	unsigned int numgroups;
+	struct archive *tarball;
 };
 
 static void free_archive(struct archive **a)
@@ -183,21 +192,46 @@ static int parse_config(const char *config_path, cJSON **result)
 	return 0;
 }
 
-static int traverse_entries(const cJSON *entries);
+static int traverse_entries(struct context *context, const cJSON *entries, const char *path);
 
 static int do_regular(const cJSON *node)
 {
 	return 0;
 }
 
-static int do_dir(const cJSON *node)
+static int add_dir(struct context *context, const char *path)
+{
+	struct archive_entry *entry;
+	int ret;
+
+	entry = archive_entry_new();
+	archive_entry_set_pathname(entry, path);
+	archive_entry_set_filetype(entry, AE_IFDIR);
+	archive_entry_set_perm(entry, 0755);
+	ret = archive_write_header(context->tarball, entry);
+	archive_entry_free(entry);
+
+	if (ret != ARCHIVE_OK)
+		return -1;
+
+	return 0;
+}
+
+static int do_dir(struct context *context, const cJSON *node, const char *cwd)
 {
 	const cJSON *entries;
+	char tmp[PATH_MAX];
 	int ret;
+
+	sprintf(tmp, "%s%s/", cwd, node->string);
+
+	ret = add_dir(context, tmp);
+	if (ret)
+		return ret;
 
 	entries = cJSON_GetObjectItemCaseSensitive(node, "entries");
 	if (cJSON_IsObject(entries)) {
-		ret = traverse_entries(entries);
+		ret = traverse_entries(context, entries, tmp);
 		if (ret)
 			return ret;
 	}
@@ -205,7 +239,7 @@ static int do_dir(const cJSON *node)
 	return 0;
 }
 
-static int traverse_entries(const cJSON *entries)
+static int traverse_entries(struct context *context, const cJSON *entries, const char *path)
 {
 	const char *type_str;
 	const cJSON *node;
@@ -224,12 +258,13 @@ static int traverse_entries(const cJSON *entries)
 				type_str = type->valuestring;
 		}
 		else
+			/* Default to regular file */
 			type_str = "regular";
 
 		printf("%s (%s)\n", node->string, type_str);
 
 		if (strcmp(type_str, "dir") == 0) {
-			ret = do_dir(node);
+			ret = do_dir(context, node, path);
 			if (ret)
 				return ret;
 		}
@@ -239,7 +274,7 @@ static int traverse_entries(const cJSON *entries)
 				return ret;
 		}
 		else {
-			fprintf(stderr, "Unknown type '%s'\n", type->valuestring);
+			fprintf(stderr, "Unknown type '%s'\n", type_str);
 			return -EINVAL;
 		}
 	}
@@ -259,6 +294,7 @@ int main(int argc, char **argv)
 	const char *defaultuser, *defaultgroup;
 	const cJSON *entries;
 	cJSON *config_json;
+	struct context context;
 
 	while ((opt = getopt(argc, argv, "i:o:b:")) != -1) {
 		switch (opt) {
@@ -310,7 +346,8 @@ int main(int argc, char **argv)
 	}
 
 	/* Gets real here! */
-	traverse_entries(entries);
+	context.tarball = tarball;
+	traverse_entries(&context, entries, "/");
 
 	/* Pack it up! */
 	archive_write_close(tarball);
