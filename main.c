@@ -11,6 +11,11 @@
 /* cJSON */
 #include <cjson/cJSON.h>
 
+struct user_map {
+	char *name;
+	uid_t uid;
+};
+
 static void free_archive(struct archive **a)
 {
 	if (*a)
@@ -32,6 +37,43 @@ static void free_malloc(void **p)
 static void usage(const char *prog)
 {
 	fprintf(stderr, "usage: %s -i <input> -o <output> -b <basedir>\n", prog);
+}
+
+static int parse_users(const cJSON *config, struct user_map **usermap, int *numusers)
+{
+	struct user_map *map;
+	const cJSON *users;
+	const cJSON *entry;
+	int count;
+	int i;
+	users = cJSON_GetObjectItemCaseSensitive(config, "users");
+	if (!cJSON_IsObject(users)) {
+		fprintf(stderr, "Missing or invalid 'users' node\n");
+		return -EINVAL;
+	}
+
+	count = cJSON_GetArraySize(users);
+	map = calloc(count, sizeof(*map));
+	if (!map)
+		return -ENOMEM;
+
+	i = 0;
+	cJSON_ArrayForEach(entry, users) {
+		if (!cJSON_IsNumber(entry)) {
+			fprintf(stderr, "UID for '%s' is not a number\n", entry->string);
+			return -EINVAL;
+		}
+		map[i].name = entry->string;
+		map[i].uid  = (uid_t)entry->valuedouble;
+		i++;
+	}
+
+	*usermap = map;
+	*numusers = count;
+
+	map = NULL;
+
+	return 0;
 }
 
 static int parse_config(const char *config_path, cJSON **result)
@@ -81,8 +123,9 @@ int main(int argc, char **argv)
 	const char *basedir = NULL;
 	const char *output = NULL;
 	const char *input = NULL;
+	struct user_map *usermap;
+	int opt, ret, numusers;
 	cJSON *config_json;
-	int opt, ret;
 
 	while ((opt = getopt(argc, argv, "i:o:b:")) != -1) {
 		switch (opt) {
@@ -109,6 +152,8 @@ int main(int argc, char **argv)
 	ret = parse_config(input, &config_json);
 	if (ret)
 		return 1;
+
+	ret = parse_users(config_json, &usermap, &numusers);
 
 	tarball = archive_write_new();
 	archive_write_set_format_pax_restricted(tarball);
