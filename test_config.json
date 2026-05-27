@@ -1,6 +1,10 @@
 {
   "users": {
     "jim": 1000,
-    "dave": 1000
+    "dave": 1001
+  },
+  "groups": {
+    "kewldoods": 1000,
+    "lusers": 1001
   }
 }

@@ -16,6 +16,11 @@ struct user_map {
 	uid_t uid;
 };
 
+struct group_map {
+	char *name;
+	gid_t gid;
+};
+
 static void free_archive(struct archive **a)
 {
 	if (*a)
@@ -46,6 +51,7 @@ static int parse_users(const cJSON *config, struct user_map **usermap, int *numu
 	const cJSON *entry;
 	int count;
 	int i;
+
 	users = cJSON_GetObjectItemCaseSensitive(config, "users");
 	if (!cJSON_IsObject(users)) {
 		fprintf(stderr, "Missing or invalid 'users' node\n");
@@ -70,6 +76,44 @@ static int parse_users(const cJSON *config, struct user_map **usermap, int *numu
 
 	*usermap = map;
 	*numusers = count;
+
+	map = NULL;
+
+	return 0;
+}
+
+static int parse_groups(const cJSON *config, struct group_map **groupmap, int *numgroups)
+{
+	struct group_map *map;
+	const cJSON *groups;
+	const cJSON *entry;
+	int count;
+	int i;
+
+	groups = cJSON_GetObjectItemCaseSensitive(config, "groups");
+	if (!cJSON_IsObject(groups)) {
+		fprintf(stderr, "Missing or invalid 'groups' node\n");
+		return -EINVAL;
+	}
+
+	count = cJSON_GetArraySize(groups);
+	map = calloc(count, sizeof(*map));
+	if (!map)
+		return -ENOMEM;
+
+	i = 0;
+	cJSON_ArrayForEach(entry, groups) {
+		if (!cJSON_IsNumber(entry)) {
+			fprintf(stderr, "GID for '%s' is not a number\n", entry->string);
+			return -EINVAL;
+		}
+		map[i].name = entry->string;
+		map[i].gid  = (gid_t)entry->valuedouble;
+		i++;
+	}
+
+	*groupmap = map;
+	*numgroups = count;
 
 	map = NULL;
 
@@ -123,8 +167,9 @@ int main(int argc, char **argv)
 	const char *basedir = NULL;
 	const char *output = NULL;
 	const char *input = NULL;
+	struct group_map *groupmap;
 	struct user_map *usermap;
-	int opt, ret, numusers;
+	int opt, ret, numusers, numgroups;
 	cJSON *config_json;
 
 	while ((opt = getopt(argc, argv, "i:o:b:")) != -1) {
@@ -154,6 +199,12 @@ int main(int argc, char **argv)
 		return 1;
 
 	ret = parse_users(config_json, &usermap, &numusers);
+	if (ret)
+		return 1;
+
+	ret = parse_groups(config_json, &groupmap, &numgroups);
+	if (ret)
+		return 1;
 
 	tarball = archive_write_new();
 	archive_write_set_format_pax_restricted(tarball);
