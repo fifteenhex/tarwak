@@ -183,6 +183,70 @@ static int parse_config(const char *config_path, cJSON **result)
 	return 0;
 }
 
+static int traverse_entries(const cJSON *entries);
+
+static int do_regular(const cJSON *node)
+{
+	return 0;
+}
+
+static int do_dir(const cJSON *node)
+{
+	const cJSON *entries;
+	int ret;
+
+	entries = cJSON_GetObjectItemCaseSensitive(node, "entries");
+	if (cJSON_IsObject(entries)) {
+		ret = traverse_entries(entries);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
+static int traverse_entries(const cJSON *entries)
+{
+	const char *type_str;
+	const cJSON *node;
+	const cJSON *type;
+	int ret;
+
+	cJSON_ArrayForEach(node, entries) {
+		type = cJSON_GetObjectItemCaseSensitive(node, "type");
+
+		if (type){
+			if (!cJSON_IsString(type)) {
+				fprintf(stderr, "Entry '%s' missing 'type'\n", node->string);
+				return -EINVAL;
+			}
+			else
+				type_str = type->valuestring;
+		}
+		else
+			type_str = "regular";
+
+		printf("%s (%s)\n", node->string, type_str);
+
+		if (strcmp(type_str, "dir") == 0) {
+			ret = do_dir(node);
+			if (ret)
+				return ret;
+		}
+		else if (strcmp(type_str, "regular") == 0) {
+			ret = do_regular(node);
+			if (ret)
+				return ret;
+		}
+		else {
+			fprintf(stderr, "Unknown type '%s'\n", type->valuestring);
+			return -EINVAL;
+		}
+	}
+
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	struct archive __attribute__((cleanup(free_archive))) *tarball = NULL;
@@ -246,7 +310,7 @@ int main(int argc, char **argv)
 	}
 
 	/* Gets real here! */
-
+	traverse_entries(entries);
 
 	/* Pack it up! */
 	archive_write_close(tarball);

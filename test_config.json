@@ -12,7 +12,11 @@
         "group": "lusers",
         "mode": "0755",
 	"entries": {
-
+		"bin/bin" : {
+			"type": "dir"
+		},
+		"justafile" : {
+		}
         }
   }
 }
