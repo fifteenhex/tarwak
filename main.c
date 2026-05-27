@@ -1,20 +1,78 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 /* libarchive */
 #include <archive.h>
 #include <archive_entry.h>
 
-static void usage(const char *prog)
-{
-	fprintf(stderr, "usage: %s -i <input> -o <output> -b <basedir>\n", prog);
-}
+/* cJSON */
+#include <cjson/cJSON.h>
 
 static void free_archive(struct archive **a)
 {
 	if (*a)
 		archive_write_free(*a);
+}
+
+static void free_file(FILE **f)
+{
+	if (*f)
+		fclose(*f);
+}
+
+static void free_malloc(void **p)
+{
+	if (*p)
+		free(*p);
+}
+
+static void usage(const char *prog)
+{
+	fprintf(stderr, "usage: %s -i <input> -o <output> -b <basedir>\n", prog);
+}
+
+static int parse_config(const char *config_path, cJSON **result)
+{
+	FILE __attribute__((cleanup(free_file))) *config_file = NULL;
+	void __attribute__((cleanup(free_malloc))) *config_buf = NULL;
+	long config_len;
+	cJSON *config;
+	int ret;
+
+	config_file = fopen(config_path, "r");
+	if (!config_file) {
+		fprintf(stderr, "Failed to open config file\n");
+		return -1;
+	}
+
+	fseek(config_file, 0, SEEK_END);
+	config_len = ftell(config_file);
+	rewind(config_file);
+
+	config_buf = malloc(config_len + 1);
+	if (!config_buf)
+		return -ENOMEM;
+
+	memset(config_buf, 0, config_len);
+	ret = fread(config_buf, 1, config_len, config_file);
+	if (ret != config_len) {
+		fprintf(stderr, "Failed to read config file\n");
+		return -1;
+	}
+
+	config = cJSON_Parse(config_buf);
+
+	if (!config) {
+		fprintf(stderr, "Failed to parse config: %s\n", cJSON_GetErrorPtr());
+		return -EINVAL;
+	}
+
+	*result = config;
+
+	return 0;
 }
 
 int main(int argc, char **argv)
@@ -23,7 +81,8 @@ int main(int argc, char **argv)
 	const char *basedir = NULL;
 	const char *output = NULL;
 	const char *input = NULL;
-	int opt;
+	cJSON *config_json;
+	int opt, ret;
 
 	while ((opt = getopt(argc, argv, "i:o:b:")) != -1) {
 		switch (opt) {
@@ -46,6 +105,10 @@ int main(int argc, char **argv)
 		usage(argv[0]);
 		return 1;
 	}
+
+	ret = parse_config(input, &config_json);
+	if (ret)
+		return 1;
 
 	tarball = archive_write_new();
 	archive_write_set_format_pax_restricted(tarball);
