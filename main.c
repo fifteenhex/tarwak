@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -12,6 +13,9 @@
 
 /* cJSON */
 #include <cjson/cJSON.h>
+
+/* libcap/caps */
+#include <sys/capability.h>
 
 struct user_map {
 	char *name;
@@ -227,6 +231,83 @@ static int parse_config(const char *config_path, cJSON **result)
 	return 0;
 }
 
+static int encode_capability(const char *str, struct vfs_cap_data *cap)
+{
+	int has_effective = 0;
+	cap_flag_value_t val;
+	cap_t c = { 0 };
+	int i;
+
+	cap->magic_etc = VFS_CAP_REVISION_2;
+
+	c = cap_from_text(str);
+	if (!c) {
+		fprintf(stderr, "failed to parse capability string '%s'\n", str);
+		return -EINVAL;
+	}
+
+	/* This is copy/paste, I hope it works! */
+	for (i = 0; i <= CAP_LAST_CAP; i++) {
+		int idx = i / 32;
+		int bit = i % 32;
+
+		if (cap_get_flag(c, i, CAP_PERMITTED, &val) == 0 && val == CAP_SET)
+		    cap->data[idx].permitted   |= (1u << bit);
+
+		if (cap_get_flag(c, i, CAP_INHERITABLE, &val) == 0 && val == CAP_SET)
+		    cap->data[idx].inheritable |= (1u << bit);
+
+		if (cap_get_flag(c, i, CAP_EFFECTIVE, &val) == 0 && val == CAP_SET)
+				 has_effective = 1;
+	}
+
+	if (has_effective)
+		cap->magic_etc |= VFS_CAP_FLAGS_EFFECTIVE;
+
+	cap_free(c);
+
+	return 0;
+}
+
+static void apply_xattrs(struct archive_entry *entry, const cJSON *xattrs)
+{
+	const cJSON *xattr;
+	int ret;
+
+	if (!cJSON_IsObject(xattrs))
+		return;
+
+	cJSON_ArrayForEach(xattr, xattrs) {
+		if (!cJSON_IsString(xattr))
+			continue;
+
+		/* Security caps are a special case and should be an array that is
+		 * smushed into one xattr? This will be broken for multiple caps
+		 * right now but I just want the cap for ping as normal user right now.
+		 */
+		if (strcmp(xattr->string, "security.capability") == 0) {
+			struct vfs_cap_data cap;
+
+			ret = encode_capability(xattr->valuestring, &cap);
+			if (ret)
+				return;
+
+			archive_entry_xattr_add_entry(entry, xattr->string, &cap, sizeof(cap));
+		}
+		/* Normal xattrs */
+		else {
+			archive_entry_xattr_add_entry(entry, xattr->string,
+						xattr->valuestring,
+						strlen(xattr->valuestring));
+		}
+	}
+}
+
+static const cJSON *json_xattrs(const cJSON *node)
+{
+	return cJSON_GetObjectItemCaseSensitive(node, "xattrs");
+}
+
 static int add_symlink(struct context *context, const char *path, const char *target)
 {
 	struct archive_entry __cleanup_archive_entry *entry = NULL;
@@ -262,15 +343,20 @@ static int do_symlink(struct context *context, const cJSON *node, const char *cw
 static int traverse_entries(struct context *context, const cJSON *entries, const char *path);
 
 static int add_file(struct context *context, const char *path,
-		    size_t data_len, int (*read_data)(void *dst, size_t len, void *priv), void *read_data_priv)
+		    size_t data_len, int (*read_data)(void *dst, size_t len, void *priv), void *read_data_priv,
+		    const cJSON *xattrs)
 {
 	struct archive_entry __cleanup_archive_entry *entry = NULL;
 
+	/* Start a regualar file */
 	entry = archive_entry_new();
 	archive_entry_set_pathname(entry, path);
 	archive_entry_set_filetype(entry, AE_IFREG);
 	archive_entry_set_perm(entry, 0644);
 	archive_entry_set_size(entry, data_len);
+
+	/* Apply any xattrs */
+	apply_xattrs(entry, xattrs);
 
 	if (archive_write_header(context->tarball, entry) != ARCHIVE_OK) {
 		fprintf(stderr, "Failed to add file\n");
@@ -352,7 +438,7 @@ static int do_regular(struct context *context, const cJSON *node, const char *cw
 
 	len = file_len(f);
 
-	return add_file(context, path, len, read_file, f);
+	return add_file(context, path, len, read_file, f, json_xattrs(node));
 }
 
 static int add_dir(struct context *context, const char *path)
@@ -514,6 +600,9 @@ int main(int argc, char **argv)
 	tarball = archive_write_new();
 	archive_write_set_format_pax_restricted(tarball);
 	archive_write_add_filter_none(tarball);
+
+	/* So GNU Tar can handle our xattrs */
+	archive_write_set_options(tarball, "xattrheader=SCHILY");
 
 	if (archive_write_open_filename(tarball, output) != ARCHIVE_OK) {
 		fprintf(stderr, "failed to open output: %s\n", archive_error_string(tarball));
