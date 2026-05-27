@@ -24,6 +24,7 @@ struct group_map {
 };
 
 struct context {
+	const char *pattern;
 	struct user_map *usermap;
 	unsigned int numusers;
 	struct group_map *groupmap;
@@ -78,7 +79,7 @@ static inline long file_len(FILE *f)
 
 static void usage(const char *prog)
 {
-	fprintf(stderr, "usage: %s -i <input> -o <output> -b <basedir>\n", prog);
+	fprintf(stderr, "usage: %s -i <input> -o <output> -b <basedir> -p <pattern>\n", prog);
 }
 
 static int parse_users(const cJSON *config, struct user_map **usermap, int *numusers)
@@ -304,25 +305,45 @@ static int read_file(void *dst, size_t len, void *priv)
 	return fread(dst, 1, len, f);
 }
 
+static int get_source_path(struct context *context, const cJSON *node, const char *name, char *buf, const char **result)
+{
+	const cJSON *source;
+
+	source = cJSON_GetObjectItemCaseSensitive(node, "source");
+	if (source) {
+		if (!cJSON_IsString(source)) {
+			fprintf(stderr, "file '%s' missing 'source'\n", node->string);
+			return -EINVAL;
+		}
+		*result = source->valuestring;
+	}
+
+	if (context->pattern) {
+		sprintf(buf, context->pattern, name);
+		*result = buf;
+		return 0;
+	}
+
+	return -EINVAL;
+}
+
 static int do_regular(struct context *context, const cJSON *node, const char *cwd)
 {
 	FILE __cleanup_file *f = NULL;
-	const cJSON *source;
 	char path[PATH_MAX];
+	char tmp[PATH_MAX];
 	const char *source_path;
 	const char *name;
 	long len;
+	int ret;
 
 	name = node->string;
 	snprintf(path, sizeof(path), "%s%s", cwd, name);
 
-	source = cJSON_GetObjectItemCaseSensitive(node, "source");
-	if (!cJSON_IsString(source)) {
-		fprintf(stderr, "file '%s' missing 'source'\n", node->string);
-		return -EINVAL;
-	}
+	ret = get_source_path(context, node, name, tmp, &source_path);
+	if (ret)
+		return ret;
 
-	source_path = source->valuestring;
 	f = fopen(source_path, "rb");
 	if (!f) {
 		fprintf(stderr, "failed to open '%s'\n", source_path);
@@ -438,6 +459,7 @@ int main(int argc, char **argv)
 	const char *basedir = NULL;
 	const char *output = NULL;
 	const char *input = NULL;
+	const char *pattern = NULL;
 	struct group_map *groupmap;
 	struct user_map *usermap;
 	int opt, ret, numusers, numgroups;
@@ -446,7 +468,7 @@ int main(int argc, char **argv)
 	cJSON *config_json;
 	struct context context;
 
-	while ((opt = getopt(argc, argv, "i:o:b:")) != -1) {
+	while ((opt = getopt(argc, argv, "i:o:b:p:")) != -1) {
 		switch (opt) {
 		case 'i':
 			input = optarg;
@@ -456,6 +478,9 @@ int main(int argc, char **argv)
 			break;
 		case 'b':
 			basedir = optarg;
+			break;
+		case 'p':
+			pattern = optarg;
 			break;
 		default:
 			usage(argv[0]);
@@ -500,6 +525,7 @@ int main(int argc, char **argv)
 	if (!context.buff)
 		return 1;
 
+	context.pattern = pattern;
 	context.tarball = tarball;
 	traverse_entries(&context, entries, "/");
 
