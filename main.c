@@ -428,8 +428,21 @@ static void collect_metadata(const struct context *context,
 		else
 			properties->mode = 0400;
 	}
+
+	/* Use default user if one wasn't specified and exists */
+	if (!properties->have_user && defaults->have_user) {
+		properties->uid = defaults->uid;
+		properties->user = defaults->user;
+	}
+
+	/* Use default group if one wasn't specified and exists */
+	if (!properties->have_group && defaults->have_group) {
+		properties->gid = defaults->gid;
+		properties->group = defaults->group;
+	}
 }
 
+/* Jam metadata into archive entry */
 static void apply_metadata(struct archive_entry *entry,
 			   const struct entity_context *entity_context)
 {
