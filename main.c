@@ -398,10 +398,11 @@ static int get_source_path(struct context *context, const cJSON *node, const cha
 	source = cJSON_GetObjectItemCaseSensitive(node, "source");
 	if (source) {
 		if (!cJSON_IsString(source)) {
-			fprintf(stderr, "file '%s' missing 'source'\n", node->string);
+			fprintf(stderr, "source for %s is not a string\n", node->string);
 			return -EINVAL;
 		}
 		*result = source->valuestring;
+		return 0;
 	}
 
 	if (context->pattern) {
@@ -409,6 +410,8 @@ static int get_source_path(struct context *context, const cJSON *node, const cha
 		*result = buf;
 		return 0;
 	}
+
+	fprintf(stderr, "file '%s' missing 'source' and no pattern specified?\n", node->string);
 
 	return -EINVAL;
 }
@@ -609,6 +612,11 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
+	/* Change into the working directory */
+	ret = chdir(basedir);
+	if (ret)
+		return 1;
+
 	/* Gets real here! */
 	context.buff = malloc(CONTEXT_BUFFSZ);
 	if (!context.buff)
@@ -616,7 +624,9 @@ int main(int argc, char **argv)
 
 	context.pattern = pattern;
 	context.tarball = tarball;
-	traverse_entries(&context, entries, "/");
+	ret = traverse_entries(&context, entries, "/");
+	if (ret)
+		return 1;
 
 	/* Pack it up! */
 	archive_write_close(tarball);

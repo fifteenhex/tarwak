@@ -1,0 +1,22 @@
+{
+    "users": { "alice": 1000 },
+    "groups": { "alice": 1000 },
+    "root": {
+        "entries": {
+            "usr/bin/ping": {
+                "type": "regular",
+                "source": "ping",
+                "user": "root",
+                "group": "root",
+                "mode": "0755",
+                "xattrs": {
+                    "security.capability": "cap_net_raw+ep"
+                }
+            },
+            "usr/bin/ping6": {
+                "type": "symlink",
+                "target": "/usr/bin/ping"
+            }
+        }
+    }
+}

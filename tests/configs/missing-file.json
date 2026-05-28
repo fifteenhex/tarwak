@@ -1,0 +1,10 @@
+{
+    "root": {
+        "entries": {
+            "afile": {
+		"source": "this-file-does-not-exist"
+             }
+           }
+        }
+    }
+}
