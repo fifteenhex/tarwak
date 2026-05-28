@@ -17,3 +17,6 @@ jobs:
 
       - name: Build
         run: meson setup build && meson compile -C build
+
+      - name: Test
+        run: meson test -C build
