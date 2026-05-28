@@ -38,6 +38,28 @@ struct context {
 	void *buff;
 };
 
+static uid_t lookup_uid(const struct context *context, const char *name)
+{
+	unsigned int i;
+
+	for (i = 0; i < context->numusers; i++)
+		if (strcmp(context->usermap[i].name, name) == 0)
+			return context->usermap[i].uid;
+
+	return 0;
+}
+
+static gid_t lookup_gid(const struct context *context, const char *name)
+{
+	unsigned int i;
+
+	for (i = 0; i < context->numgroups; i++)
+		if (strcmp(context->groupmap[i].name, name) == 0)
+		return context->groupmap[i].gid;
+
+	return 0;
+}
+
 /* Clean up helpers */
 static void free_archive(struct archive **a)
 {
@@ -269,6 +291,35 @@ static int encode_capability(const char *str, struct vfs_cap_data *cap)
 	return 0;
 }
 
+static void apply_metadata(struct archive_entry *entry, const cJSON *node,
+			   const struct context *context)
+{
+	const cJSON *user;
+	const cJSON *group;
+	const cJSON *mode ;
+
+	user = cJSON_GetObjectItemCaseSensitive(node, "user");
+	group = cJSON_GetObjectItemCaseSensitive(node, "group");
+	mode = cJSON_GetObjectItemCaseSensitive(node, "mode");
+
+	if (cJSON_IsString(mode))
+		archive_entry_set_perm(entry, (mode_t)strtol(mode->valuestring, NULL, 8));
+
+	if (cJSON_IsString(user)) {
+		uid_t uid = lookup_uid(context, user->valuestring);
+
+		archive_entry_set_uname(entry, user->valuestring);
+		archive_entry_set_uid(entry, uid);
+	}
+
+	if (cJSON_IsString(group)) {
+		gid_t gid = lookup_gid(context, group->valuestring);
+
+		archive_entry_set_gname(entry, group->valuestring);
+		archive_entry_set_gid(entry, gid);
+	}
+}
+
 static void apply_xattrs(struct archive_entry *entry, const cJSON *xattrs)
 {
 	const cJSON *xattr;
@@ -344,7 +395,7 @@ static int traverse_entries(struct context *context, const cJSON *entries, const
 
 static int add_file(struct context *context, const char *path,
 		    size_t data_len, int (*read_data)(void *dst, size_t len, void *priv), void *read_data_priv,
-		    const cJSON *xattrs)
+		    const cJSON *node)
 {
 	struct archive_entry __cleanup_archive_entry *entry = NULL;
 
@@ -352,11 +403,13 @@ static int add_file(struct context *context, const char *path,
 	entry = archive_entry_new();
 	archive_entry_set_pathname(entry, path);
 	archive_entry_set_filetype(entry, AE_IFREG);
-	archive_entry_set_perm(entry, 0644);
 	archive_entry_set_size(entry, data_len);
 
+	/* Apply file permissions */
+	apply_metadata(entry, node, context);
+
 	/* Apply any xattrs */
-	apply_xattrs(entry, xattrs);
+	apply_xattrs(entry, json_xattrs(node));
 
 	if (archive_write_header(context->tarball, entry) != ARCHIVE_OK) {
 		fprintf(stderr, "Failed to add file\n");
@@ -441,7 +494,7 @@ static int do_regular(struct context *context, const cJSON *node, const char *cw
 
 	len = file_len(f);
 
-	return add_file(context, path, len, read_file, f, json_xattrs(node));
+	return add_file(context, path, len, read_file, f, node);
 }
 
 static int add_dir(struct context *context, const char *path)
@@ -622,6 +675,10 @@ int main(int argc, char **argv)
 	if (!context.buff)
 		return 1;
 
+	context.usermap = usermap;
+	context.numusers = numusers;
+	context.groupmap = groupmap;
+	context.numgroups = numgroups;
 	context.pattern = pattern;
 	context.tarball = tarball;
 	ret = traverse_entries(&context, entries, "/");
