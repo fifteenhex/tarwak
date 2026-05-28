@@ -43,6 +43,11 @@ struct context {
 
 /* Holder for properties we'll apply to entities */
 struct entity_context {
+	mode_t mode;
+	uid_t uid;
+	const char* user;
+	gid_t gid;
+	const char *group;
 	time_t ts;
 };
 
@@ -337,8 +342,10 @@ static void apply_timestamps(struct archive_entry *entry,
 	archive_entry_set_mtime(entry, entity_context->ts, 0);
 }
 
-static void apply_metadata(struct archive_entry *entry, const cJSON *node,
-			   const struct context *context)
+static void collect_metadata(const cJSON *node,
+			     const struct context *context,
+			     struct entity_context *entity_context,
+			     const char *type)
 {
 	const cJSON *group;
 	const cJSON *user;
@@ -349,21 +356,37 @@ static void apply_metadata(struct archive_entry *entry, const cJSON *node,
 	mode = cJSON_GetObjectItemCaseSensitive(node, "mode");
 
 	if (cJSON_IsString(mode))
-		archive_entry_set_perm(entry, (mode_t)strtol(mode->valuestring, NULL, 8));
+		entity_context->mode = (mode_t)strtol(mode->valuestring, NULL, 8);
+	else {
+		if (strcmp(type, "dir") == 0)
+			entity_context->mode = 0500;
+		else
+			entity_context->mode = 0400;
+	}
 
 	if (cJSON_IsString(user)) {
 		uid_t uid = lookup_uid(context, user->valuestring);
 
-		archive_entry_set_uname(entry, user->valuestring);
-		archive_entry_set_uid(entry, uid);
+		entity_context->uid = uid;
+		entity_context->user = user->valuestring;
 	}
 
 	if (cJSON_IsString(group)) {
 		gid_t gid = lookup_gid(context, group->valuestring);
 
-		archive_entry_set_gname(entry, group->valuestring);
-		archive_entry_set_gid(entry, gid);
+		entity_context->gid = gid;
+		entity_context->group = group->valuestring;
 	}
+}
+
+static void apply_metadata(struct archive_entry *entry,
+			   const struct entity_context *entity_context)
+{
+	archive_entry_set_perm(entry, entity_context->mode);
+	archive_entry_set_uid(entry, entity_context->uid);
+	archive_entry_set_uname(entry, entity_context->user);
+	archive_entry_set_gid(entry, entity_context->gid);
+	archive_entry_set_gname(entry, entity_context->group);
 }
 
 static void apply_xattrs(struct archive_entry *entry, const cJSON *xattrs)
@@ -462,7 +485,7 @@ static int add_file(struct context *context,
 	archive_entry_set_size(entry, data_len);
 
 	/* Apply file permissions */
-	apply_metadata(entry, node, context);
+	apply_metadata(entry, entity_context);
 
 	/* Apply timestamps */
 	apply_timestamps(entry, entity_context);
@@ -559,7 +582,9 @@ static int do_regular(struct context *context,
 	return add_file(context, entity_context, path, len, read_file, f, node);
 }
 
-static int add_dir(struct context *context, const char *path)
+static int add_dir(struct context *context,
+		   struct entity_context *entity_context,
+		   const char *path)
 {
 	struct archive_entry __cleanup_archive_entry *entry = NULL;
 	int ret;
@@ -567,7 +592,13 @@ static int add_dir(struct context *context, const char *path)
 	entry = archive_entry_new();
 	archive_entry_set_pathname(entry, path);
 	archive_entry_set_filetype(entry, AE_IFDIR);
-	archive_entry_set_perm(entry, 0755);
+
+	/* Apply timestamps */
+	apply_timestamps(entry, entity_context);
+
+	/* Apply permissions, user, group */
+	apply_metadata(entry, entity_context);
+
 	ret = archive_write_header(context->tarball, entry);
 
 	if (ret != ARCHIVE_OK)
@@ -587,7 +618,7 @@ static int do_dir(struct context *context,
 
 	sprintf(tmp, "%s%s/", cwd, node->string);
 
-	ret = add_dir(context, tmp);
+	ret = add_dir(context, entity_context, tmp);
 	if (ret)
 		return ret;
 
@@ -640,7 +671,9 @@ static int traverse_entries(struct context *context, const cJSON *entries, const
 
 		printf("%s (%s)\n", node->string, type_str);
 
+		/* Collect together all of the properties that are valid for any type */
 		collect_timestamps(node, context, &entity_context);
+		collect_metadata(node, context, &entity_context, type_str);
 
 		for (i = 0; i < ARRAY_SZ(entry_handlers); i++) {
 			if (strcmp(type_str, entry_handlers[i].type) == 0) {
