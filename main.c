@@ -41,14 +41,28 @@ struct context {
 	void *buff;
 };
 
-/* Holder for properties we'll apply to entities */
-struct entity_context {
+struct metadata {
 	mode_t mode;
 	uid_t uid;
 	const char* user;
 	gid_t gid;
 	const char *group;
 	time_t ts;
+};
+
+/* Holder for properties we'll apply to entities */
+struct entity_context {
+	struct metadata properties;
+};
+
+/* Holder for properties that a directory can provide as defines to children */
+struct directory_context;
+
+struct directory_context {
+	const struct directory_context *parent;
+	struct metadata defaults;
+	const cJSON *entries;
+	const char *path;
 };
 
 static uid_t lookup_uid(const struct context *context, const char *name)
@@ -320,6 +334,7 @@ static void collect_timestamps(const cJSON *node,
 			       const struct context *context,
 			       struct entity_context *entity_context)
 {
+	struct metadata *properties = &entity_context->properties;
 	const cJSON *mtime;
 	time_t ts;
 
@@ -333,13 +348,15 @@ static void collect_timestamps(const cJSON *node,
 		ts = context->start_time;
 	}
 
-	entity_context->ts = ts;
+	properties->ts = ts;
 }
 
 static void apply_timestamps(struct archive_entry *entry,
 			     struct entity_context *entity_context)
 {
-	archive_entry_set_mtime(entry, entity_context->ts, 0);
+	struct metadata *properties = &entity_context->properties;
+
+	archive_entry_set_mtime(entry, properties->ts, 0);
 }
 
 static void collect_metadata(const cJSON *node,
@@ -347,6 +364,7 @@ static void collect_metadata(const cJSON *node,
 			     struct entity_context *entity_context,
 			     const char *type)
 {
+	struct metadata *properties = &entity_context->properties;
 	const cJSON *group;
 	const cJSON *user;
 	const cJSON *mode;
@@ -356,37 +374,39 @@ static void collect_metadata(const cJSON *node,
 	mode = cJSON_GetObjectItemCaseSensitive(node, "mode");
 
 	if (cJSON_IsString(mode))
-		entity_context->mode = (mode_t)strtol(mode->valuestring, NULL, 8);
+		properties->mode = (mode_t)strtol(mode->valuestring, NULL, 8);
 	else {
 		if (strcmp(type, "dir") == 0)
-			entity_context->mode = 0500;
+			properties->mode = 0500;
 		else
-			entity_context->mode = 0400;
+			properties->mode = 0400;
 	}
 
 	if (cJSON_IsString(user)) {
 		uid_t uid = lookup_uid(context, user->valuestring);
 
-		entity_context->uid = uid;
-		entity_context->user = user->valuestring;
+		properties->uid = uid;
+		properties->user = user->valuestring;
 	}
 
 	if (cJSON_IsString(group)) {
 		gid_t gid = lookup_gid(context, group->valuestring);
 
-		entity_context->gid = gid;
-		entity_context->group = group->valuestring;
+		properties->gid = gid;
+		properties->group = group->valuestring;
 	}
 }
 
 static void apply_metadata(struct archive_entry *entry,
 			   const struct entity_context *entity_context)
 {
-	archive_entry_set_perm(entry, entity_context->mode);
-	archive_entry_set_uid(entry, entity_context->uid);
-	archive_entry_set_uname(entry, entity_context->user);
-	archive_entry_set_gid(entry, entity_context->gid);
-	archive_entry_set_gname(entry, entity_context->group);
+	const struct metadata *properties = &entity_context->properties;
+
+	archive_entry_set_perm(entry, properties->mode);
+	archive_entry_set_uid(entry, properties->uid);
+	archive_entry_set_uname(entry, properties->user);
+	archive_entry_set_gid(entry, properties->gid);
+	archive_entry_set_gname(entry, properties->group);
 }
 
 static void apply_xattrs(struct archive_entry *entry, const cJSON *xattrs)
@@ -467,8 +487,6 @@ static int do_symlink(struct context *context,
 
 	return add_symlink(context, entity_context, path, target->valuestring);
 }
-
-static int traverse_entries(struct context *context, const cJSON *entries, const char *path);
 
 static int add_file(struct context *context,
 		    struct entity_context *entity_context,
@@ -607,11 +625,17 @@ static int add_dir(struct context *context,
 	return 0;
 }
 
+static int traverse_entries(struct context *context,
+			    const struct directory_context *directory_context);
+
 static int do_dir(struct context *context,
 		  struct entity_context *entity_context,
 		  const cJSON *node,
 		  const char *cwd)
 {
+	struct directory_context directory_context = {
+		.parent = NULL, // Fix me
+	};
 	const cJSON *entries;
 	char tmp[PATH_MAX];
 	int ret;
@@ -624,7 +648,10 @@ static int do_dir(struct context *context,
 
 	entries = cJSON_GetObjectItemCaseSensitive(node, "entries");
 	if (cJSON_IsObject(entries)) {
-		ret = traverse_entries(context, entries, tmp);
+		directory_context.entries = entries;
+		directory_context.path = tmp;
+
+		ret = traverse_entries(context, &directory_context);
 		if (ret)
 			return ret;
 	}
@@ -643,7 +670,8 @@ static const struct entry_handler entry_handlers[] = {
 	{ "symlink", do_symlink },
 };
 
-static int traverse_entries(struct context *context, const cJSON *entries, const char *path)
+static int traverse_entries(struct context *context,
+			    const struct directory_context *directory_context)
 {
 	const char *type_str;
 	const cJSON *node;
@@ -651,7 +679,7 @@ static int traverse_entries(struct context *context, const cJSON *entries, const
 	int ret;
 	int i;
 
-	cJSON_ArrayForEach(node, entries) {
+	cJSON_ArrayForEach(node, directory_context->entries) {
 		struct entity_context entity_context = { };
 		bool handled = false;
 
@@ -677,7 +705,7 @@ static int traverse_entries(struct context *context, const cJSON *entries, const
 
 		for (i = 0; i < ARRAY_SZ(entry_handlers); i++) {
 			if (strcmp(type_str, entry_handlers[i].type) == 0) {
-				ret = entry_handlers[i].cb(context, &entity_context, node, path);
+				ret = entry_handlers[i].cb(context, &entity_context, node, directory_context->path);
 				if (ret)
 					return ret;
 
@@ -710,6 +738,7 @@ int main(int argc, char **argv)
 	const cJSON *entries;
 	cJSON *config_json;
 	struct context context;
+	struct directory_context root_directory_context = { 0 };
 
 	while ((opt = getopt(argc, argv, "i:o:b:p:")) != -1) {
 		switch (opt) {
@@ -783,7 +812,11 @@ int main(int argc, char **argv)
 	context.numgroups = numgroups;
 	context.pattern = pattern;
 	context.tarball = tarball;
-	ret = traverse_entries(&context, entries, "/");
+
+	root_directory_context.entries = entries;
+	root_directory_context.path = "/";
+
+	ret = traverse_entries(&context, &root_directory_context);
 	if (ret)
 		return 1;
 
