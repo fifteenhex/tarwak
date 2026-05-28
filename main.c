@@ -1,3 +1,4 @@
+#define _XOPEN_SOURCE
 #include <limits.h>
 #include <errno.h>
 #include <stdbool.h>
@@ -5,6 +6,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 /* libarchive */
@@ -29,6 +31,7 @@ struct group_map {
 
 struct context {
 	const char *pattern;
+	time_t start_time;
 	struct user_map *usermap;
 	unsigned int numusers;
 	struct group_map *groupmap;
@@ -36,6 +39,11 @@ struct context {
 	struct archive *tarball;
 	#define CONTEXT_BUFFSZ (1024 * 1024)
 	void *buff;
+};
+
+/* Holder for properties we'll apply to entities */
+struct entity_context {
+	time_t ts;
 };
 
 static uid_t lookup_uid(const struct context *context, const char *name)
@@ -253,6 +261,18 @@ static int parse_config(const char *config_path, cJSON **result)
 	return 0;
 }
 
+static time_t parse_timestamp(const char *str)
+{
+	struct tm tm = { 0 };
+
+	if (!strptime(str, "%Y-%m-%dT%H:%M:%S", &tm)) {
+		fprintf(stderr, "invalid timestamp '%s', expected YYYY-MM-DDTHH:MM:SS\n", str);
+		return (time_t)-1;
+	}
+
+	return mktime(&tm);
+}
+
 static int encode_capability(const char *str, struct vfs_cap_data *cap)
 {
 	int has_effective = 0;
@@ -291,12 +311,38 @@ static int encode_capability(const char *str, struct vfs_cap_data *cap)
 	return 0;
 }
 
+static void collect_timestamps(const cJSON *node,
+			       const struct context *context,
+			       struct entity_context *entity_context)
+{
+	const cJSON *mtime;
+	time_t ts;
+
+	mtime = cJSON_GetObjectItemCaseSensitive(node, "mtime");
+
+	if (cJSON_IsString(mtime)) {
+		ts = parse_timestamp(mtime->valuestring);
+		if (ts == (time_t)-1)
+			ts = context->start_time;
+	} else {
+		ts = context->start_time;
+	}
+
+	entity_context->ts = ts;
+}
+
+static void apply_timestamps(struct archive_entry *entry,
+			     struct entity_context *entity_context)
+{
+	archive_entry_set_mtime(entry, entity_context->ts, 0);
+}
+
 static void apply_metadata(struct archive_entry *entry, const cJSON *node,
 			   const struct context *context)
 {
-	const cJSON *user;
 	const cJSON *group;
-	const cJSON *mode ;
+	const cJSON *user;
+	const cJSON *mode;
 
 	user = cJSON_GetObjectItemCaseSensitive(node, "user");
 	group = cJSON_GetObjectItemCaseSensitive(node, "group");
@@ -359,7 +405,10 @@ static const cJSON *json_xattrs(const cJSON *node)
 	return cJSON_GetObjectItemCaseSensitive(node, "xattrs");
 }
 
-static int add_symlink(struct context *context, const char *path, const char *target)
+static int add_symlink(struct context *context,
+		       struct entity_context *entity_context,
+		       const char *path,
+		       const char *target)
 {
 	struct archive_entry __cleanup_archive_entry *entry = NULL;
 
@@ -369,13 +418,18 @@ static int add_symlink(struct context *context, const char *path, const char *ta
 	archive_entry_set_symlink(entry, target);
 	archive_entry_set_perm(entry, 0777);
 
+	apply_timestamps(entry, entity_context);
+
 	if (archive_write_header(context->tarball, entry) != ARCHIVE_OK)
 		return -1;
 
 	return 0;
 }
 
-static int do_symlink(struct context *context, const cJSON *node, const char *cwd)
+static int do_symlink(struct context *context,
+		      struct entity_context *entity_context,
+		      const cJSON *node,
+		      const char *cwd)
 {
 	const cJSON *target;
 	char path[PATH_MAX];
@@ -388,12 +442,14 @@ static int do_symlink(struct context *context, const cJSON *node, const char *cw
 
 	snprintf(path, sizeof(path), "%s%s", cwd, node->string);
 
-	return add_symlink(context, path, target->valuestring);
+	return add_symlink(context, entity_context, path, target->valuestring);
 }
 
 static int traverse_entries(struct context *context, const cJSON *entries, const char *path);
 
-static int add_file(struct context *context, const char *path,
+static int add_file(struct context *context,
+		    struct entity_context *entity_context,
+		    const char *path,
 		    size_t data_len, int (*read_data)(void *dst, size_t len, void *priv), void *read_data_priv,
 		    const cJSON *node)
 {
@@ -407,6 +463,9 @@ static int add_file(struct context *context, const char *path,
 
 	/* Apply file permissions */
 	apply_metadata(entry, node, context);
+
+	/* Apply timestamps */
+	apply_timestamps(entry, entity_context);
 
 	/* Apply any xattrs */
 	apply_xattrs(entry, json_xattrs(node));
@@ -469,7 +528,10 @@ static int get_source_path(struct context *context, const cJSON *node, const cha
 	return -EINVAL;
 }
 
-static int do_regular(struct context *context, const cJSON *node, const char *cwd)
+static int do_regular(struct context *context,
+		      struct entity_context *entity_context,
+		      const cJSON *node,
+		      const char *cwd)
 {
 	FILE __cleanup_file *f = NULL;
 	char path[PATH_MAX];
@@ -494,7 +556,7 @@ static int do_regular(struct context *context, const cJSON *node, const char *cw
 
 	len = file_len(f);
 
-	return add_file(context, path, len, read_file, f, node);
+	return add_file(context, entity_context, path, len, read_file, f, node);
 }
 
 static int add_dir(struct context *context, const char *path)
@@ -514,7 +576,10 @@ static int add_dir(struct context *context, const char *path)
 	return 0;
 }
 
-static int do_dir(struct context *context, const cJSON *node, const char *cwd)
+static int do_dir(struct context *context,
+		  struct entity_context *entity_context,
+		  const cJSON *node,
+		  const char *cwd)
 {
 	const cJSON *entries;
 	char tmp[PATH_MAX];
@@ -538,7 +603,7 @@ static int do_dir(struct context *context, const cJSON *node, const char *cwd)
 
 struct entry_handler {
 	const char* type;
-	int (*cb)(struct context *context, const cJSON *node, const char *cwd);
+	int (*cb)(struct context *context, struct entity_context *entity_context, const cJSON *node, const char *cwd);
 };
 
 static const struct entry_handler entry_handlers[] = {
@@ -556,6 +621,7 @@ static int traverse_entries(struct context *context, const cJSON *entries, const
 	int i;
 
 	cJSON_ArrayForEach(node, entries) {
+		struct entity_context entity_context = { };
 		bool handled = false;
 
 		type = cJSON_GetObjectItemCaseSensitive(node, "type");
@@ -574,9 +640,11 @@ static int traverse_entries(struct context *context, const cJSON *entries, const
 
 		printf("%s (%s)\n", node->string, type_str);
 
+		collect_timestamps(node, context, &entity_context);
+
 		for (i = 0; i < ARRAY_SZ(entry_handlers); i++) {
 			if (strcmp(type_str, entry_handlers[i].type) == 0) {
-				ret = entry_handlers[i].cb(context, node, path);
+				ret = entry_handlers[i].cb(context, &entity_context, node, path);
 				if (ret)
 					return ret;
 
@@ -675,6 +743,7 @@ int main(int argc, char **argv)
 	if (!context.buff)
 		return 1;
 
+	context.start_time = time(NULL);
 	context.usermap = usermap;
 	context.numusers = numusers;
 	context.groupmap = groupmap;
