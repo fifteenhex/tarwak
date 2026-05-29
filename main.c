@@ -137,6 +137,8 @@ static void free_archive(struct archive **a)
 		archive_write_free(*a);
 }
 
+#define __cleanup_archive __attribute__((cleanup(free_archive)))
+
 static void free_archive_entry(struct archive_entry **entry)
 {
 	if (*entry)
@@ -158,6 +160,8 @@ static void free_malloc(void **p)
 	if (*p)
 		free(*p);
 }
+
+#define __cleanup_malloc __attribute__((cleanup(free_malloc)))
 
 /* Util functions */
 #define ARRAY_SZ(_a) (sizeof(_a) / sizeof(_a[0]))
@@ -195,6 +199,8 @@ static int parse_users(const cJSON *config, struct user_map **usermap, int *numu
 		fprintf(stderr, "No users, everything will be owned by root\n");
 		*usermap = NULL;
 		*numusers = 0;
+
+		return 0;
 	}
 
 	map = calloc(count, sizeof(*map));
@@ -237,6 +243,8 @@ static int parse_groups(const cJSON *config, struct group_map **groupmap, int *n
 		fprintf(stderr, "No groups, everything will be owned by root\n");
 		*groupmap = NULL;
 		*numgroups = 0;
+
+		return 0;
 	}
 
 	map = calloc(count, sizeof(*map));
@@ -316,8 +324,8 @@ static int parse_defaults(const cJSON *config,
 
 static int parse_config(const char *config_path, cJSON **result)
 {
+	void __cleanup_malloc *config_buf = NULL;
 	FILE __cleanup_file *config_file = NULL;
-	void __attribute__((cleanup(free_malloc))) *config_buf = NULL;
 	long config_len;
 	cJSON *config;
 	int ret;
@@ -329,6 +337,8 @@ static int parse_config(const char *config_path, cJSON **result)
 	}
 
 	config_len = file_len(config_file);
+	if (!config_len)
+		return -EINVAL;
 
 	config_buf = malloc(config_len + 1);
 	if (!config_buf)
@@ -386,7 +396,7 @@ static int encode_capability(const char *str, struct vfs_cap_data *cap)
 		int bit = i % 32;
 
 		if (cap_get_flag(c, i, CAP_PERMITTED, &val) == 0 && val == CAP_SET)
-		    cap->data[idx].permitted   |= (1u << bit);
+		    cap->data[idx].permitted |= (1u << bit);
 
 		if (cap_get_flag(c, i, CAP_INHERITABLE, &val) == 0 && val == CAP_SET)
 		    cap->data[idx].inheritable |= (1u << bit);
@@ -433,13 +443,14 @@ static void apply_timestamps(struct archive_entry *entry,
 }
 
 /* Extract metadata fields from an object */
-static void parse_metadata(const struct context *context,
+static int parse_metadata(const struct context *context,
 			   const cJSON *node,
 			   struct metadata *metadata)
 {
 	const char *group = NULL;
 	const char *user = NULL;
 	const cJSON *mode;
+	int ret;
 
 	/* Just in case */
 	memset(metadata, 0, sizeof(*metadata));
@@ -454,7 +465,9 @@ static void parse_metadata(const struct context *context,
 
 	if (user) {
 		uid_t uid;
-		lookup_uid(context, user, &uid);
+		ret = lookup_uid(context, user, &uid);
+		if (ret)
+			return ret;
 
 		metadata->uid = uid;
 		metadata->user = user;
@@ -463,12 +476,16 @@ static void parse_metadata(const struct context *context,
 
 	if (group) {
 		gid_t gid;
-		lookup_gid(context, group, &gid);
+		ret = lookup_gid(context, group, &gid);
+		if (ret)
+			return ret;
 
 		metadata->gid = gid;
 		metadata->group = group;
 		metadata->have_group = true;
 	}
+
+	return 0;
 }
 
 /* Work out the effective metadata for an entity */
@@ -561,7 +578,7 @@ static void apply_xattrs(struct archive_entry *entry, const cJSON *xattrs)
 		 * right now but I just want the cap for ping as normal user right now.
 		 */
 		if (strcmp(xattr->string, "security.capability") == 0) {
-			struct vfs_cap_data cap;
+			struct vfs_cap_data cap = { 0 };
 
 			ret = encode_capability(xattr->valuestring, &cap);
 			if (ret)
@@ -800,8 +817,11 @@ static int do_dir(const struct context *context,
 
 		/* Grab the defaults if any. */
 		defaults = cJSON_GetObjectItemCaseSensitive(node, "defaults");
-		if (cJSON_IsObject(defaults))
-			parse_metadata(context, defaults, &this_directory_context.defaults);
+		if (cJSON_IsObject(defaults)) {
+			ret = parse_metadata(context, defaults, &this_directory_context.defaults);
+			if (ret)
+				return ret;
+		}
 
 		ret = traverse_entries(context, &this_directory_context);
 		if (ret)
@@ -984,7 +1004,7 @@ static int traverse_entries(const struct context *context,
 
 int main(int argc, char **argv)
 {
-	struct archive __attribute__((cleanup(free_archive))) *tarball = NULL;
+	struct archive __cleanup_archive *tarball = NULL;
 	struct directory_context root_directory_context = { 0 };
 	struct context context = { 0 };
 	const char *basedir = NULL;
