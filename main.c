@@ -1,4 +1,5 @@
 #define _XOPEN_SOURCE
+#include <assert.h>
 #include <limits.h>
 #include <errno.h>
 #include <stdbool.h>
@@ -39,6 +40,12 @@ struct context {
 	struct archive *tarball;
 	#define CONTEXT_BUFFSZ (1024 * 1024)
 	void *buff;
+
+	/* Defaults */
+	const char *default_user;
+	uid_t default_uid;
+	const char *default_group;
+	gid_t default_gid;
 };
 
 struct metadata {
@@ -53,7 +60,6 @@ struct metadata {
 	gid_t gid;
 	const char *group;
 
-	bool have_timestamp;
 	time_t ts;
 };
 
@@ -77,26 +83,48 @@ struct directory_context {
 
 #define DIR_PATH(_d) (_d->path)
 
-static uid_t lookup_uid(const struct context *context, const char *name)
+static int lookup_uid(const struct context *context, const char *name, uid_t *result)
 {
 	unsigned int i;
+
+	/* This should never be NULL */
+	assert(name);
+
+	/* root is built in, doesn't need to be in the map */
+	if (strcmp(name, "root") == 0) {
+		*result = 0;
+		return 0;
+	}
 
 	for (i = 0; i < context->numusers; i++)
-		if (strcmp(context->usermap[i].name, name) == 0)
-			return context->usermap[i].uid;
+		if (strcmp(context->usermap[i].name, name) == 0) {
+			*result = context->usermap[i].uid;
+			return 0;
+		}
 
-	return 0;
+	return -EINVAL;
 }
 
-static gid_t lookup_gid(const struct context *context, const char *name)
+static int lookup_gid(const struct context *context, const char *name, gid_t *result)
 {
 	unsigned int i;
 
-	for (i = 0; i < context->numgroups; i++)
-		if (strcmp(context->groupmap[i].name, name) == 0)
-		return context->groupmap[i].gid;
+	/* This should never be NULL */
+	assert(name);
 
-	return 0;
+	/* root is built in, doesn't need to be in the map */
+	if (strcmp(name, "root") == 0) {
+		*result = 0;
+		return 0;
+	}
+
+	for (i = 0; i < context->numgroups; i++)
+		if (strcmp(context->groupmap[i].name, name) == 0) {
+			*result = context->groupmap[i].gid;
+			return 0;
+		}
+
+	return -EINVAL;
 }
 
 /* Clean up helpers */
@@ -231,8 +259,22 @@ static int parse_groups(const cJSON *config, struct group_map **groupmap, int *n
 	return 0;
 }
 
-static int parse_root(const cJSON *config, const cJSON **rootentries,
-		      const char **defaultuser, const char **defaultgroup)
+static void parse_user_group(const cJSON *node, const char **user, const char **group)
+{
+	const cJSON *_group;
+	const cJSON *_user;
+
+	_user = cJSON_GetObjectItemCaseSensitive(node, "user");
+	if (cJSON_IsString(_user))
+		*user = _user->valuestring;
+
+	_group = cJSON_GetObjectItemCaseSensitive(node, "group");
+	if (cJSON_IsString(_group))
+		*group = _group->valuestring;
+}
+
+static int parse_root(const cJSON *config,
+		      const cJSON **rootentries)
 {
 	const cJSON *root, *entries;
 
@@ -249,6 +291,22 @@ static int parse_root(const cJSON *config, const cJSON **rootentries,
 	}
 
 	*rootentries = entries;
+
+
+	return 0;
+}
+
+static int parse_defaults(const cJSON *config,
+		      const char **defaultuser,
+		      const char **defaultgroup)
+{
+	const cJSON *defaults;
+
+	defaults = cJSON_GetObjectItemCaseSensitive(config, "defaults");
+	if (!cJSON_IsObject(defaults))
+		return 0;
+
+	parse_user_group(defaults, defaultuser, defaultgroup);
 
 	return 0;
 }
@@ -376,35 +434,36 @@ static void parse_metadata(const struct context *context,
 			   const cJSON *node,
 			   struct metadata *metadata)
 {
-	const cJSON *group;
-	const cJSON *user;
+	const char *group = NULL;
+	const char *user = NULL;
 	const cJSON *mode;
 
 	/* Just in case */
 	memset(metadata, 0, sizeof(*metadata));
 
 	mode = cJSON_GetObjectItemCaseSensitive(node, "mode");
-
 	if (cJSON_IsString(mode)) {
 		metadata->mode = (mode_t)strtol(mode->valuestring, NULL, 8);
 		metadata->have_mode = true;
 	}
 
-	user = cJSON_GetObjectItemCaseSensitive(node, "user");
-	if (cJSON_IsString(user)) {
-		uid_t uid = lookup_uid(context, user->valuestring);
+	parse_user_group(node, &user, &group);
+
+	if (user) {
+		uid_t uid;
+		lookup_uid(context, user, &uid);
 
 		metadata->uid = uid;
-		metadata->user = user->valuestring;
+		metadata->user = user;
 		metadata->have_user = true;
 	}
 
-	group = cJSON_GetObjectItemCaseSensitive(node, "group");
-	if (cJSON_IsString(group)) {
-		gid_t gid = lookup_gid(context, group->valuestring);
+	if (group) {
+		gid_t gid;
+		lookup_gid(context, group, &gid);
 
 		metadata->gid = gid;
-		metadata->group = group->valuestring;
+		metadata->group = group;
 		metadata->have_group = true;
 	}
 }
@@ -418,8 +477,11 @@ static void collect_metadata(const struct context *context,
 	const struct metadata *defaults = &directory_context->defaults;
 	struct metadata *properties = &entity_context->properties;
 
+	if (properties->have_mode) {
+		/* nop: its already there */
+	}
 	/* Use default mode if one wasn't specified and exists */
-	if (!properties->have_mode && defaults->have_mode)
+	else if (defaults->have_mode)
 		properties->mode = defaults->mode;
 	/* Otherwise revert to some sensible defaults */
 	else {
@@ -429,16 +491,32 @@ static void collect_metadata(const struct context *context,
 			properties->mode = 0400;
 	}
 
+	if (properties->have_user) {
+		/* nop: its already there */
+	}
 	/* Use default user if one wasn't specified and exists */
-	if (!properties->have_user && defaults->have_user) {
+	else if (defaults->have_user) {
 		properties->uid = defaults->uid;
 		properties->user = defaults->user;
 	}
+	/* Use the global default */
+	else {
+		properties->uid = context->default_uid;
+		properties->user = context->default_user;
+	}
 
+	if (properties->have_group) {
+		/* nop: its already there */
+	}
 	/* Use default group if one wasn't specified and exists */
-	if (!properties->have_group && defaults->have_group) {
+	else if (defaults->have_group) {
 		properties->gid = defaults->gid;
 		properties->group = defaults->group;
+	}
+	/* Use the global default */
+	else {
+		properties->gid = context->default_gid;
+		properties->group = context->default_group;
 	}
 }
 
@@ -758,6 +836,9 @@ static int traverse_entries(const struct context *context,
 			/* Default to regular file */
 			type_str = "regular";
 
+		/* Pull out the entities own local properties */
+		parse_metadata(context, node, &entity_context.properties);
+
 		printf("%s (%s)\n", node->string, type_str);
 
 		/* Collect together all of the properties that are valid for any type */
@@ -789,6 +870,7 @@ int main(int argc, char **argv)
 {
 	struct archive __attribute__((cleanup(free_archive))) *tarball = NULL;
 	struct directory_context root_directory_context = { 0 };
+	struct context context = { 0 };
 	const char *basedir = NULL;
 	const char *output = NULL;
 	const char *input = NULL;
@@ -796,10 +878,10 @@ int main(int argc, char **argv)
 	struct group_map *groupmap;
 	struct user_map *usermap;
 	int opt, ret, numusers, numgroups;
-	const char *defaultuser, *defaultgroup;
+	const char *defaultgroup = NULL;
+	const char *defaultuser = NULL;
 	const cJSON *entries;
 	cJSON *config_json;
-	struct context context;
 
 	while ((opt = getopt(argc, argv, "i:o:b:p:")) != -1) {
 		switch (opt) {
@@ -839,7 +921,11 @@ int main(int argc, char **argv)
 	if (ret)
 		return 1;
 
-	ret = parse_root(config_json, &entries, &defaultuser, &defaultgroup);
+	ret = parse_root(config_json, &entries);
+	if (ret)
+		return 1;
+
+	ret = parse_defaults(config_json, &defaultuser, &defaultgroup);
 	if (ret)
 		return 1;
 
@@ -875,9 +961,20 @@ int main(int argc, char **argv)
 	context.pattern = pattern;
 	context.tarball = tarball;
 
+	/* Setup defaults */
+	context.default_user = defaultuser ? defaultuser : "root";
+	lookup_uid(&context, context.default_user, &context.default_uid);
+	context.default_group = defaultgroup ? defaultgroup : "root";
+	lookup_gid(&context, context.default_group, &context.default_gid);
+
 	/* Initilise context for root directory */
 	root_directory_context.entries = entries;
 	root_directory_context.path = "/";
+
+	/* Print out some useful info before going for it */
+	printf("Starting TAR creation..\n");
+	printf("default user: \'%s\', default group \'%s\'\n",
+		context.default_user, context.default_group);
 
 	ret = traverse_entries(&context, &root_directory_context);
 	if (ret)
