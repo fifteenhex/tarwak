@@ -69,7 +69,10 @@ struct metadata {
 /* Holder for properties we'll apply to entities */
 struct entity_context {
 	struct metadata properties;
+
+	bool have_cap;
 	struct vfs_cap_data cap;
+
 	const cJSON *node;
 };
 
@@ -562,6 +565,8 @@ static void apply_metadata(struct archive_entry *entry,
 	_apply_metadata(entry, entity_context, true);
 }
 
+#define XATTR_SEC_CAP "security.capability"
+
 static int parse_xattrs(const cJSON *node, struct entity_context *entity_context)
 {
 	const cJSON *xattrs;
@@ -585,10 +590,15 @@ static int parse_xattrs(const cJSON *node, struct entity_context *entity_context
 		 * smushed into one xattr? This will be broken for multiple caps
 		 * right now but I just want the cap for ping as normal user right now.
 		 */
-		if (strcmp(xattr->string, "security.capability") == 0) {
-			ret = encode_capability(xattr->valuestring, &entity_context->cap);
+		if (strcmp(xattr->string, XATTR_SEC_CAP) == 0) {
+			const char *cap = xattr->valuestring;
+
+			fprintf(stderr, "Adding security capability: %s\n", cap);
+			ret = encode_capability(cap, &entity_context->cap);
 			if (ret)
 				return ret;
+
+			entity_context->have_cap = true;
 		}
 		/* Normal xattrs */
 		else {
@@ -601,11 +611,13 @@ static int parse_xattrs(const cJSON *node, struct entity_context *entity_context
 
 static void apply_xattrs(struct archive_entry *entry, const struct entity_context *entity_context)
 {
+	if (entity_context->have_cap) {
+		const struct vfs_cap_data *cap = &entity_context->cap;
+
+		archive_entry_xattr_add_entry(entry, XATTR_SEC_CAP, cap, sizeof(*cap));
+	}
+
 #if 0
-	int ret;
-
-	archive_entry_xattr_add_entry(entry, xattr->string, &cap, sizeof(cap));
-
 	archive_entry_xattr_add_entry(entry, xattr->string,
 				xattr->valuestring,
 				strlen(xattr->valuestring));
