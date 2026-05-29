@@ -580,6 +580,7 @@ static const cJSON *json_xattrs(const cJSON *node)
 	return cJSON_GetObjectItemCaseSensitive(node, "xattrs");
 }
 
+/* Symlinks */
 static int add_symlink(const struct context *context,
 		       const struct entity_context *entity_context,
 		       const char *path,
@@ -623,6 +624,7 @@ static int do_symlink(const struct context *context,
 	return add_symlink(context, entity_context, path, target->valuestring);
 }
 
+/* Normal files */
 static int add_file(const struct context *context,
 		    const struct entity_context *entity_context,
 		    const char *path,
@@ -739,6 +741,7 @@ static int do_regular(const struct context *context,
 	return add_file(context, entity_context, path, len, read_file, f, node);
 }
 
+/* Directories */
 static int add_dir(const struct context *context,
 		   const struct entity_context *entity_context,
 		   const char *path)
@@ -805,6 +808,41 @@ static int do_dir(const struct context *context,
 	return 0;
 }
 
+/* FIFOs, not sure if we really need this,.. */
+static int add_fifo(const struct context *context,
+		    const struct entity_context *entity_context,
+		    const char *path)
+{
+	struct archive_entry __cleanup_archive_entry *entry = NULL;
+	int ret;
+
+	entry = archive_entry_new();
+	archive_entry_set_pathname(entry, path);
+	archive_entry_set_filetype(entry, AE_IFIFO);
+	apply_metadata(entry, entity_context);
+	apply_timestamps(entry, entity_context);
+
+	ret = archive_write_header(context->tarball, entry);
+	if (ret != ARCHIVE_OK)
+		return -1;
+
+	return 0;
+}
+
+static int do_fifo(const struct context *context,
+		   const struct directory_context *directory_context,
+		   struct entity_context *entity_context)
+{
+	const cJSON *node = ENTITY_NODE(entity_context);
+	char path[PATH_MAX];
+
+	snprintf(path, sizeof(path), "%s%s",
+		 DIR_PATH(directory_context),
+		 node->string);
+
+	return add_fifo(context, entity_context, path);
+}
+
 struct entry_handler {
 	const char* type;
 	int (*cb)(const struct context *context,
@@ -816,6 +854,7 @@ static const struct entry_handler entry_handlers[] = {
 	{ "dir", do_dir },
 	{ "regular", do_regular },
 	{ "symlink", do_symlink },
+	{ "fifo", do_fifo },
 };
 
 static int traverse_entries(const struct context *context,
