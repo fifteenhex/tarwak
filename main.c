@@ -20,6 +20,9 @@
 /* libcap/caps */
 #include <sys/capability.h>
 
+/* For special files */
+#include <sys/sysmacros.h>
+
 struct user_map {
 	char *name;
 	uid_t uid;
@@ -843,6 +846,67 @@ static int do_fifo(const struct context *context,
 	return add_fifo(context, entity_context, path);
 }
 
+/* block and char */
+static int add_device(const struct context *context,
+		      const struct entity_context *entity_context,
+		      const char *path, unsigned int filetype,
+		      unsigned int major, unsigned int minor)
+{
+	struct archive_entry __cleanup_archive_entry *entry = NULL;
+	int ret;
+
+	entry = archive_entry_new();
+	archive_entry_set_pathname(entry, path);
+	archive_entry_set_filetype(entry, filetype);
+	archive_entry_set_rdev(entry, makedev(major, minor));
+	apply_metadata(entry, entity_context);
+	apply_timestamps(entry, entity_context);
+
+	ret = archive_write_header(context->tarball, entry);
+	if (ret != ARCHIVE_OK)
+		return -1;
+
+	return 0;
+}
+
+static int do_device(const struct context *context,
+		     const struct directory_context *directory_context,
+		     struct entity_context *entity_context,
+		     unsigned int filetype)
+{
+	const cJSON *node = ENTITY_NODE(entity_context);
+	const cJSON *major, *minor;
+	char path[PATH_MAX];
+
+	major = cJSON_GetObjectItemCaseSensitive(node, "major");
+	minor = cJSON_GetObjectItemCaseSensitive(node, "minor");
+
+	if (!cJSON_IsNumber(major) || !cJSON_IsNumber(minor)) {
+		fprintf(stderr, "device '%s' missing 'major' or 'minor'\n", node->string);
+		return -EINVAL;
+	}
+
+	snprintf(path, sizeof(path), "%s%s", DIR_PATH(directory_context), node->string);
+
+	return add_device(context, entity_context, path, filetype,
+			  (unsigned int)major->valueint,
+			  (unsigned int)minor->valueint);
+}
+
+static int do_char(const struct context *context,
+		   const struct directory_context *directory_context,
+		   struct entity_context *entity_context)
+{
+	return do_device(context, directory_context, entity_context, AE_IFCHR);
+}
+
+static int do_block(const struct context *context,
+		    const struct directory_context *directory_context,
+		    struct entity_context *entity_context)
+{
+	return do_device(context, directory_context, entity_context, AE_IFBLK);
+}
+
 struct entry_handler {
 	const char* type;
 	int (*cb)(const struct context *context,
@@ -855,6 +919,8 @@ static const struct entry_handler entry_handlers[] = {
 	{ "regular", do_regular },
 	{ "symlink", do_symlink },
 	{ "fifo", do_fifo },
+	{ "char", do_char },
+	{ "block", do_block },
 };
 
 static int traverse_entries(const struct context *context,
