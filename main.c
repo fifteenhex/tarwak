@@ -69,6 +69,7 @@ struct metadata {
 /* Holder for properties we'll apply to entities */
 struct entity_context {
 	struct metadata properties;
+	struct vfs_cap_data cap;
 	const cJSON *node;
 };
 
@@ -561,13 +562,20 @@ static void apply_metadata(struct archive_entry *entry,
 	_apply_metadata(entry, entity_context, true);
 }
 
-static void apply_xattrs(struct archive_entry *entry, const cJSON *xattrs)
+static int parse_xattrs(const cJSON *node, struct entity_context *entity_context)
 {
+	const cJSON *xattrs;
 	const cJSON *xattr;
 	int ret;
 
+	xattrs = cJSON_GetObjectItemCaseSensitive(node, "xattrs");
+
+	/* No extended attributes */
+	if (!xattrs)
+		return 0;
+
 	if (!cJSON_IsObject(xattrs))
-		return;
+		return -EINVAL;
 
 	cJSON_ArrayForEach(xattr, xattrs) {
 		if (!cJSON_IsString(xattr))
@@ -578,26 +586,30 @@ static void apply_xattrs(struct archive_entry *entry, const cJSON *xattrs)
 		 * right now but I just want the cap for ping as normal user right now.
 		 */
 		if (strcmp(xattr->string, "security.capability") == 0) {
-			struct vfs_cap_data cap = { 0 };
-
-			ret = encode_capability(xattr->valuestring, &cap);
+			ret = encode_capability(xattr->valuestring, &entity_context->cap);
 			if (ret)
-				return;
-
-			archive_entry_xattr_add_entry(entry, xattr->string, &cap, sizeof(cap));
+				return ret;
 		}
 		/* Normal xattrs */
 		else {
-			archive_entry_xattr_add_entry(entry, xattr->string,
-						xattr->valuestring,
-						strlen(xattr->valuestring));
+
 		}
 	}
+
+	return 0;
 }
 
-static const cJSON *json_xattrs(const cJSON *node)
+static void apply_xattrs(struct archive_entry *entry, const struct entity_context *entity_context)
 {
-	return cJSON_GetObjectItemCaseSensitive(node, "xattrs");
+#if 0
+	int ret;
+
+	archive_entry_xattr_add_entry(entry, xattr->string, &cap, sizeof(cap));
+
+	archive_entry_xattr_add_entry(entry, xattr->string,
+				xattr->valuestring,
+				strlen(xattr->valuestring));
+#endif
 }
 
 /* Symlinks */
@@ -666,7 +678,7 @@ static int add_file(const struct context *context,
 	apply_timestamps(entry, entity_context);
 
 	/* Apply any xattrs */
-	apply_xattrs(entry, json_xattrs(node));
+	apply_xattrs(entry, entity_context);
 
 	if (archive_write_header(context->tarball, entry) != ARCHIVE_OK) {
 		fprintf(stderr, "Failed to add file\n");
@@ -974,6 +986,11 @@ static int traverse_entries(const struct context *context,
 
 		/* Pull out the entities own local properties */
 		parse_metadata(context, node, &entity_context.properties);
+
+		/* Get the extended attributes */
+		ret = parse_xattrs(node, &entity_context);
+		if (ret)
+			return ret;
 
 		printf("%s (%s)\n", node->string, type_str);
 
