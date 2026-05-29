@@ -521,16 +521,24 @@ static void collect_metadata(const struct context *context,
 }
 
 /* Jam metadata into archive entry */
-static void apply_metadata(struct archive_entry *entry,
-			   const struct entity_context *entity_context)
+static void _apply_metadata(struct archive_entry *entry,
+			    const struct entity_context *entity_context,
+			    bool set_perm)
 {
 	const struct metadata *properties = &entity_context->properties;
 
-	archive_entry_set_perm(entry, properties->mode);
+	if (set_perm)
+		archive_entry_set_perm(entry, properties->mode);
 	archive_entry_set_uid(entry, properties->uid);
 	archive_entry_set_uname(entry, properties->user);
 	archive_entry_set_gid(entry, properties->gid);
 	archive_entry_set_gname(entry, properties->group);
+}
+
+static void apply_metadata(struct archive_entry *entry,
+			   const struct entity_context *entity_context)
+{
+	_apply_metadata(entry, entity_context, true);
 }
 
 static void apply_xattrs(struct archive_entry *entry, const cJSON *xattrs)
@@ -583,9 +591,12 @@ static int add_symlink(const struct context *context,
 	archive_entry_set_pathname(entry, path);
 	archive_entry_set_filetype(entry, AE_IFLNK);
 	archive_entry_set_symlink(entry, target);
-	archive_entry_set_perm(entry, 0777);
 
 	apply_timestamps(entry, entity_context);
+
+	/* Apply the user/group, but hardcode the permissions */
+	_apply_metadata(entry, entity_context, false);
+	archive_entry_set_perm(entry, 0777);
 
 	if (archive_write_header(context->tarball, entry) != ARCHIVE_OK)
 		return -1;
