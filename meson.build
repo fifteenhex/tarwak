@@ -1,4 +1,4 @@
-project('tarwak', 'c', meson_version: '>= 1.11.0')
+project('tarwak', 'c', meson_version: '>= 1.3.2')
 
 libarchive = dependency('libarchive')
 libcjson = dependency('libcjson')
@@ -17,13 +17,13 @@ test_config_simple = test_configs / 'simple.json'
 test_output_simple = meson.project_build_root() / 'simple.tar'
 
 # Tests that *should* fail because of missing args
-test('args-none', tarwak, args: [], expected_fail: true)
+test('args-none', tarwak, args: [], should_fail: true)
 
 test(
     'args-config-only',
     tarwak,
     args: ['-i', test_config_simple],
-    expected_fail: true,
+    should_fail: true,
 )
 
 # Parser test cases that should fail because the config is wrong
@@ -39,7 +39,7 @@ foreach case : badconfig_test_cases
         case[0],
         tarwak,
         args: ['-i', case[1], '-o', case[2], '-b', test_files],
-        expected_fail: true,
+        should_fail: true,
     )
 endforeach
 
