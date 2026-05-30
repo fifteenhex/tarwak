@@ -89,3 +89,27 @@ Every entry supports these common fields:
 | `mode`  | Octal permission string, e.g. `"0755"`                                     |
 | `mtime` | Modification time as `YYYY-MM-DDTHH:MM:SS`. Defaults to program start time |
 | `xattrs`| Extended attributes                                                        |
+
+### `dir`
+
+A directory. May contain nested `entities` and a `defaults` block that sets
+fallback `user`, `group`, and `mode` for all children.
+
+```json
+"bin": {
+    "type":  "dir",
+    "user":  "root",
+    "group": "root",
+    "mode":  "0755",
+    "defaults": {
+        "user":  "root",
+        "group": "root",
+        "mode":  "0755"
+    },
+    "entries": {
+        "passwd": {
+            "source": "mypasswordbinary.elf"
+        }
+    }
+}
+```
