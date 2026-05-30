@@ -68,7 +68,7 @@ properties, its always a directory etc. So it only has one key.
 
 ```json
 "root": {
-    "entries": { ... }
+    "entities": { ... }
 }
 ```
 

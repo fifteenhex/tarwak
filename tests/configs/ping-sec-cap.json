@@ -2,7 +2,7 @@
     "users": { "alice": 1000 },
     "groups": { "alice": 1000 },
     "root": {
-        "entries": {
+        "entities": {
             "usr/bin/ping": {
                 "type": "regular",
                 "source": "ping",

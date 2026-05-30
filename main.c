@@ -23,6 +23,9 @@
 /* For special files */
 #include <sys/sysmacros.h>
 
+/* JSON keys */
+#define KEY_ENTITIES "entities"
+
 /* Printing macros */
 #define error(...) ((void)fprintf(stderr, __VA_ARGS__))
 
@@ -87,7 +90,7 @@ struct directory_context;
 struct directory_context {
 	const struct directory_context *parent;
 	struct metadata defaults;
-	const cJSON *entries;
+	const cJSON *entities;
 	const char *path;
 };
 
@@ -294,9 +297,9 @@ static void parse_user_group(const cJSON *node, const char **user, const char **
 }
 
 static int __must_check parse_root(const cJSON *config,
-		      const cJSON **rootentries)
+		      const cJSON **rootentities)
 {
-	const cJSON *root, *entries;
+	const cJSON *root, *entities;
 
 	root = cJSON_GetObjectItemCaseSensitive(config, "root");
 	if (!cJSON_IsObject(root)) {
@@ -304,13 +307,13 @@ static int __must_check parse_root(const cJSON *config,
 		return -EINVAL;
 	}
 
-	entries = cJSON_GetObjectItemCaseSensitive(root, "entries");
-	if (!cJSON_IsObject(entries)) {
-		error("Missing or invalid 'entries' node\n");
+	entities = cJSON_GetObjectItemCaseSensitive(root, KEY_ENTITIES);
+	if (!cJSON_IsObject(entities)) {
+		error("Missing or invalid 'entities' node\n");
 		return -EINVAL;
 	}
 
-	*rootentries = entries;
+	*rootentities = entities;
 
 
 	return 0;
@@ -831,7 +834,7 @@ static int add_dir(const struct context *context,
 	return 0;
 }
 
-static int traverse_entries(const struct context *context,
+static int traverse_entities(const struct context *context,
 			    const struct directory_context *directory_context);
 
 static int do_dir(const struct context *context,
@@ -843,7 +846,7 @@ static int do_dir(const struct context *context,
 	};
 	const cJSON *node = ENTITY_NODE(entity_context);
 	const cJSON *defaults;
-	const cJSON *entries;
+	const cJSON *entities;
 	char tmp[PATH_MAX];
 	int ret;
 
@@ -853,10 +856,10 @@ static int do_dir(const struct context *context,
 	if (ret)
 		return ret;
 
-	entries = cJSON_GetObjectItemCaseSensitive(node, "entries");
-	if (cJSON_IsObject(entries)) {
+	entities = cJSON_GetObjectItemCaseSensitive(node, KEY_ENTITIES);
+	if (cJSON_IsObject(entities)) {
 		/* Setup the context to be used for our children */
-		this_directory_context.entries = entries;
+		this_directory_context.entities = entities;
 		this_directory_context.path = tmp;
 
 		/* Grab the defaults if any. */
@@ -867,7 +870,7 @@ static int do_dir(const struct context *context,
 				return ret;
 		}
 
-		ret = traverse_entries(context, &this_directory_context);
+		ret = traverse_entities(context, &this_directory_context);
 		if (ret)
 			return ret;
 	}
@@ -989,7 +992,7 @@ static const struct entry_handler entry_handlers[] = {
 	{ "block", do_block },
 };
 
-static int traverse_entries(const struct context *context,
+static int traverse_entities(const struct context *context,
 			    const struct directory_context *directory_context)
 {
 	const char *type_str;
@@ -998,7 +1001,7 @@ static int traverse_entries(const struct context *context,
 	int ret;
 	int i;
 
-	cJSON_ArrayForEach(node, directory_context->entries) {
+	cJSON_ArrayForEach(node, directory_context->entities) {
 		struct entity_context entity_context = {
 			.node = node,
 		};
@@ -1069,7 +1072,7 @@ int main(int argc, char **argv)
 	int opt, ret, numusers, numgroups;
 	const char *defaultgroup = NULL;
 	const char *defaultuser = NULL;
-	const cJSON *entries;
+	const cJSON *entities;
 	cJSON *config_json;
 
 	while ((opt = getopt(argc, argv, "i:o:b:p:")) != -1) {
@@ -1110,7 +1113,7 @@ int main(int argc, char **argv)
 	if (ret)
 		return 1;
 
-	ret = parse_root(config_json, &entries);
+	ret = parse_root(config_json, &entities);
 	if (ret)
 		return 1;
 
@@ -1162,7 +1165,7 @@ int main(int argc, char **argv)
 		return 1;
 
 	/* Initilise context for root directory */
-	root_directory_context.entries = entries;
+	root_directory_context.entities = entities;
 	root_directory_context.path = "/";
 
 	/* Print out some useful info before going for it */
@@ -1170,7 +1173,7 @@ int main(int argc, char **argv)
 	printf("default user: \'%s\', default group \'%s\'\n",
 		context.default_user, context.default_group);
 
-	ret = traverse_entries(&context, &root_directory_context);
+	ret = traverse_entities(&context, &root_directory_context);
 	if (ret)
 		return 1;
 
