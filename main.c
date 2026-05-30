@@ -93,6 +93,8 @@ struct directory_context {
 
 #define DIR_PATH(_d) (_d->path)
 
+#define __must_check __attribute__((warn_unused_result))
+
 static int lookup_uid(const struct context *context, const char *name, uid_t *result)
 {
 	unsigned int i;
@@ -627,11 +629,14 @@ static void apply_xattrs(struct archive_entry *entry, const struct entity_contex
 #endif
 }
 
-static struct archive_entry *start_entity(const char *path, unsigned int type)
+static struct archive_entry __must_check *start_entity(const char *path, unsigned int type)
 {
 	struct archive_entry *entry;
 
 	entry = archive_entry_new();
+	if (!entry)
+		return NULL;
+
 	archive_entry_set_pathname(entry, path);
 	archive_entry_set_filetype(entry, type);
 
@@ -647,6 +652,9 @@ static int add_symlink(const struct context *context,
 	struct archive_entry __cleanup_archive_entry *entry = NULL;
 
 	entry = start_entity(path, AE_IFLNK);
+	if (!entry)
+		return -ENOMEM;
+
 	archive_entry_set_symlink(entry, target);
 
 	apply_timestamps(entry, entity_context);
@@ -684,13 +692,15 @@ static int do_symlink(const struct context *context,
 static int add_file(const struct context *context,
 		    const struct entity_context *entity_context,
 		    const char *path,
-		    size_t data_len, int (*read_data)(void *dst, size_t len, void *priv), void *read_data_priv,
-		    const cJSON *node)
+		    size_t data_len, int (*read_data)(void *dst, size_t len, void *priv), void *read_data_priv)
 {
 	struct archive_entry __cleanup_archive_entry *entry = NULL;
 
 	/* Start a regualar file */
 	entry = start_entity(path, AE_IFREG);
+	if (!entry)
+		return -ENOMEM;
+
 	archive_entry_set_size(entry, data_len);
 
 	/* Apply file permissions */
@@ -792,7 +802,7 @@ static int do_regular(const struct context *context,
 
 	len = file_len(f);
 
-	return add_file(context, entity_context, path, len, read_file, f, node);
+	return add_file(context, entity_context, path, len, read_file, f);
 }
 
 /* Directories */
@@ -804,6 +814,8 @@ static int add_dir(const struct context *context,
 	int ret;
 
 	entry = start_entity(path, AE_IFDIR);
+	if (!entry)
+		return -ENOMEM;
 
 	/* Apply timestamps */
 	apply_timestamps(entry, entity_context);
@@ -872,6 +884,9 @@ static int add_fifo(const struct context *context,
 	int ret;
 
 	entry = start_entity(path, AE_IFIFO);
+	if (!entry)
+		return -ENOMEM;
+
 	apply_metadata(entry, entity_context);
 	apply_timestamps(entry, entity_context);
 
@@ -906,6 +921,9 @@ static int add_device(const struct context *context,
 	int ret;
 
 	entry = start_entity(path, filetype);
+	if (!entry)
+		return -ENOMEM;
+
 	archive_entry_set_rdev(entry, makedev(major, minor));
 	apply_metadata(entry, entity_context);
 	apply_timestamps(entry, entity_context);
