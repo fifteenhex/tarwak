@@ -95,7 +95,7 @@ struct directory_context {
 
 #define __must_check __attribute__((warn_unused_result))
 
-static int lookup_uid(const struct context *context, const char *name, uid_t *result)
+static int __must_check lookup_uid(const struct context *context, const char *name, uid_t *result)
 {
 	unsigned int i;
 
@@ -117,7 +117,7 @@ static int lookup_uid(const struct context *context, const char *name, uid_t *re
 	return -EINVAL;
 }
 
-static int lookup_gid(const struct context *context, const char *name, gid_t *result)
+static int __must_check lookup_gid(const struct context *context, const char *name, gid_t *result)
 {
 	unsigned int i;
 
@@ -191,7 +191,7 @@ static void usage(const char *prog)
 	error("usage: %s -i <input> -o <output> -b <basedir> -p <pattern>\n", prog);
 }
 
-static int parse_users(const cJSON *config, struct user_map **usermap, int *numusers)
+static int __must_check parse_users(const cJSON *config, struct user_map **usermap, int *numusers)
 {
 	struct user_map *map;
 	const cJSON *users;
@@ -235,7 +235,7 @@ static int parse_users(const cJSON *config, struct user_map **usermap, int *numu
 	return 0;
 }
 
-static int parse_groups(const cJSON *config, struct group_map **groupmap, int *numgroups)
+static int __must_check parse_groups(const cJSON *config, struct group_map **groupmap, int *numgroups)
 {
 	struct group_map *map;
 	const cJSON *groups;
@@ -293,7 +293,7 @@ static void parse_user_group(const cJSON *node, const char **user, const char **
 		*group = _group->valuestring;
 }
 
-static int parse_root(const cJSON *config,
+static int __must_check parse_root(const cJSON *config,
 		      const cJSON **rootentries)
 {
 	const cJSON *root, *entries;
@@ -316,7 +316,7 @@ static int parse_root(const cJSON *config,
 	return 0;
 }
 
-static int parse_defaults(const cJSON *config,
+static int __must_check parse_defaults(const cJSON *config,
 		      const char **defaultuser,
 		      const char **defaultgroup)
 {
@@ -331,7 +331,7 @@ static int parse_defaults(const cJSON *config,
 	return 0;
 }
 
-static int parse_config(const char *config_path, cJSON **result)
+static int __must_check parse_config(const char *config_path, cJSON **result)
 {
 	void __cleanup_malloc *config_buf = NULL;
 	FILE __cleanup_file *config_file = NULL;
@@ -384,7 +384,7 @@ static time_t parse_timestamp(const char *str)
 	return mktime(&tm);
 }
 
-static int encode_capability(const char *str, struct vfs_cap_data *cap)
+static int __must_check encode_capability(const char *str, struct vfs_cap_data *cap)
 {
 	int has_effective = 0;
 	cap_flag_value_t val;
@@ -452,7 +452,7 @@ static void apply_timestamps(struct archive_entry *entry,
 }
 
 /* Extract metadata fields from an object */
-static int parse_metadata(const struct context *context,
+static int __must_check parse_metadata(const struct context *context,
 			   const cJSON *node,
 			   struct metadata *metadata)
 {
@@ -572,7 +572,7 @@ static void apply_metadata(struct archive_entry *entry,
 
 #define XATTR_SEC_CAP "security.capability"
 
-static int parse_xattrs(const cJSON *node, struct entity_context *entity_context)
+static int __must_check parse_xattrs(const cJSON *node, struct entity_context *entity_context)
 {
 	const cJSON *xattrs;
 	const cJSON *xattr;
@@ -1019,7 +1019,9 @@ static int traverse_entries(const struct context *context,
 			type_str = "regular";
 
 		/* Pull out the entities own local properties */
-		parse_metadata(context, node, &entity_context.properties);
+		ret = parse_metadata(context, node, &entity_context.properties);
+		if (ret)
+			return ret;
 
 		/* Get the extended attributes */
 		ret = parse_xattrs(node, &entity_context);
@@ -1150,9 +1152,14 @@ int main(int argc, char **argv)
 
 	/* Setup defaults */
 	context.default_user = defaultuser ? defaultuser : "root";
-	lookup_uid(&context, context.default_user, &context.default_uid);
+	ret = lookup_uid(&context, context.default_user, &context.default_uid);
+	if (ret)
+		return 1;
+
 	context.default_group = defaultgroup ? defaultgroup : "root";
-	lookup_gid(&context, context.default_group, &context.default_gid);
+	ret = lookup_gid(&context, context.default_group, &context.default_gid);
+	if (ret)
+		return 1;
 
 	/* Initilise context for root directory */
 	root_directory_context.entries = entries;
