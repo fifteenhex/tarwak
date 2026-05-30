@@ -72,4 +72,20 @@ properties, its always a directory etc. So it only has one key.
 }
 ```
 
-** WORK IN PROGRESS **
+## Entities
+
+Each key in an `entities` object is the path of a filesystem object relative to
+the current directory. The path can contain `/` and you don't need to describe
+the entire tree but how this works isn't entirely worked out yet. You might
+not get the results you expect.
+
+Every entry supports these common fields:
+
+| Field   | Description                                                                |
+|---------|----------------------------------------------------------------------------|
+| `type`  | Entry type (see below). Defaults to `regular` if omitted                   |
+| `user`  | Owner username. Falls back to directory default or global default          |
+| `group` | Owner group name. Falls back to directory default or global default        |
+| `mode`  | Octal permission string, e.g. `"0755"`                                     |
+| `mtime` | Modification time as `YYYY-MM-DDTHH:MM:SS`. Defaults to program start time |
+| `xattrs`| Extended attributes                                                        |
