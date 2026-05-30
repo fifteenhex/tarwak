@@ -627,6 +627,17 @@ static void apply_xattrs(struct archive_entry *entry, const struct entity_contex
 #endif
 }
 
+static struct archive_entry *start_entity(const char *path, unsigned int type)
+{
+	struct archive_entry *entry;
+
+	entry = archive_entry_new();
+	archive_entry_set_pathname(entry, path);
+	archive_entry_set_filetype(entry, type);
+
+	return entry;
+}
+
 /* Symlinks */
 static int add_symlink(const struct context *context,
 		       const struct entity_context *entity_context,
@@ -635,9 +646,7 @@ static int add_symlink(const struct context *context,
 {
 	struct archive_entry __cleanup_archive_entry *entry = NULL;
 
-	entry = archive_entry_new();
-	archive_entry_set_pathname(entry, path);
-	archive_entry_set_filetype(entry, AE_IFLNK);
+	entry = start_entity(path, AE_IFLNK);
 	archive_entry_set_symlink(entry, target);
 
 	apply_timestamps(entry, entity_context);
@@ -681,9 +690,7 @@ static int add_file(const struct context *context,
 	struct archive_entry __cleanup_archive_entry *entry = NULL;
 
 	/* Start a regualar file */
-	entry = archive_entry_new();
-	archive_entry_set_pathname(entry, path);
-	archive_entry_set_filetype(entry, AE_IFREG);
+	entry = start_entity(path, AE_IFREG);
 	archive_entry_set_size(entry, data_len);
 
 	/* Apply file permissions */
@@ -796,9 +803,7 @@ static int add_dir(const struct context *context,
 	struct archive_entry __cleanup_archive_entry *entry = NULL;
 	int ret;
 
-	entry = archive_entry_new();
-	archive_entry_set_pathname(entry, path);
-	archive_entry_set_filetype(entry, AE_IFDIR);
+	entry = start_entity(path, AE_IFDIR);
 
 	/* Apply timestamps */
 	apply_timestamps(entry, entity_context);
@@ -866,9 +871,7 @@ static int add_fifo(const struct context *context,
 	struct archive_entry __cleanup_archive_entry *entry = NULL;
 	int ret;
 
-	entry = archive_entry_new();
-	archive_entry_set_pathname(entry, path);
-	archive_entry_set_filetype(entry, AE_IFIFO);
+	entry = start_entity(path, AE_IFIFO);
 	apply_metadata(entry, entity_context);
 	apply_timestamps(entry, entity_context);
 
@@ -902,9 +905,7 @@ static int add_device(const struct context *context,
 	struct archive_entry __cleanup_archive_entry *entry = NULL;
 	int ret;
 
-	entry = archive_entry_new();
-	archive_entry_set_pathname(entry, path);
-	archive_entry_set_filetype(entry, filetype);
+	entry = start_entity(path, filetype);
 	archive_entry_set_rdev(entry, makedev(major, minor));
 	apply_metadata(entry, entity_context);
 	apply_timestamps(entry, entity_context);
