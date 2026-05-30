@@ -23,6 +23,9 @@
 /* For special files */
 #include <sys/sysmacros.h>
 
+/* Printing macros */
+#define error(...) ((void)fprintf(stderr, __VA_ARGS__))
+
 struct user_map {
 	char *name;
 	uid_t uid;
@@ -183,7 +186,7 @@ static inline long file_len(FILE *f)
 
 static void usage(const char *prog)
 {
-	fprintf(stderr, "usage: %s -i <input> -o <output> -b <basedir> -p <pattern>\n", prog);
+	error("usage: %s -i <input> -o <output> -b <basedir> -p <pattern>\n", prog);
 }
 
 static int parse_users(const cJSON *config, struct user_map **usermap, int *numusers)
@@ -200,7 +203,7 @@ static int parse_users(const cJSON *config, struct user_map **usermap, int *numu
 
 	/* No user mapping is fine, everything is root */
 	if (!count) {
-		fprintf(stderr, "No users, everything will be owned by root\n");
+		error("No users, everything will be owned by root\n");
 		*usermap = NULL;
 		*numusers = 0;
 
@@ -214,7 +217,7 @@ static int parse_users(const cJSON *config, struct user_map **usermap, int *numu
 	i = 0;
 	cJSON_ArrayForEach(entry, users) {
 		if (!cJSON_IsNumber(entry)) {
-			fprintf(stderr, "UID for '%s' is not a number\n", entry->string);
+			error("UID for '%s' is not a number\n", entry->string);
 			return -EINVAL;
 		}
 		map[i].name = entry->string;
@@ -244,7 +247,7 @@ static int parse_groups(const cJSON *config, struct group_map **groupmap, int *n
 
 	/* no group map is fine */
 	if (!count) {
-		fprintf(stderr, "No groups, everything will be owned by root\n");
+		error("No groups, everything will be owned by root\n");
 		*groupmap = NULL;
 		*numgroups = 0;
 
@@ -258,7 +261,7 @@ static int parse_groups(const cJSON *config, struct group_map **groupmap, int *n
 	i = 0;
 	cJSON_ArrayForEach(entry, groups) {
 		if (!cJSON_IsNumber(entry)) {
-			fprintf(stderr, "GID for '%s' is not a number\n", entry->string);
+			error("GID for '%s' is not a number\n", entry->string);
 			return -EINVAL;
 		}
 		map[i].name = entry->string;
@@ -295,13 +298,13 @@ static int parse_root(const cJSON *config,
 
 	root = cJSON_GetObjectItemCaseSensitive(config, "root");
 	if (!cJSON_IsObject(root)) {
-		fprintf(stderr, "Missing or invalid 'root' node\n");
+		error("Missing or invalid 'root' node\n");
 		return -EINVAL;
 	}
 
 	entries = cJSON_GetObjectItemCaseSensitive(root, "entries");
 	if (!cJSON_IsObject(entries)) {
-		fprintf(stderr, "Missing or invalid 'entries' node\n");
+		error("Missing or invalid 'entries' node\n");
 		return -EINVAL;
 	}
 
@@ -336,7 +339,7 @@ static int parse_config(const char *config_path, cJSON **result)
 
 	config_file = fopen(config_path, "r");
 	if (!config_file) {
-		fprintf(stderr, "Failed to open config file\n");
+		error("Failed to open config file\n");
 		return -1;
 	}
 
@@ -351,14 +354,14 @@ static int parse_config(const char *config_path, cJSON **result)
 	memset(config_buf, 0, config_len);
 	ret = fread(config_buf, 1, config_len, config_file);
 	if (ret != config_len) {
-		fprintf(stderr, "Failed to read config file\n");
+		error("Failed to read config file\n");
 		return -1;
 	}
 
 	config = cJSON_Parse(config_buf);
 
 	if (!config) {
-		fprintf(stderr, "Failed to parse config: %s\n", cJSON_GetErrorPtr());
+		error("Failed to parse config: %s\n", cJSON_GetErrorPtr());
 		return -EINVAL;
 	}
 
@@ -372,7 +375,7 @@ static time_t parse_timestamp(const char *str)
 	struct tm tm = { 0 };
 
 	if (!strptime(str, "%Y-%m-%dT%H:%M:%S", &tm)) {
-		fprintf(stderr, "invalid timestamp '%s', expected YYYY-MM-DDTHH:MM:SS\n", str);
+		error("invalid timestamp '%s', expected YYYY-MM-DDTHH:MM:SS\n", str);
 		return (time_t)-1;
 	}
 
@@ -390,7 +393,7 @@ static int encode_capability(const char *str, struct vfs_cap_data *cap)
 
 	c = cap_from_text(str);
 	if (!c) {
-		fprintf(stderr, "failed to parse capability string '%s'\n", str);
+		error("failed to parse capability string '%s'\n", str);
 		return -EINVAL;
 	}
 
@@ -593,7 +596,7 @@ static int parse_xattrs(const cJSON *node, struct entity_context *entity_context
 		if (strcmp(xattr->string, XATTR_SEC_CAP) == 0) {
 			const char *cap = xattr->valuestring;
 
-			fprintf(stderr, "Adding security capability: %s\n", cap);
+			error("Adding security capability: %s\n", cap);
 			ret = encode_capability(cap, &entity_context->cap);
 			if (ret)
 				return ret;
@@ -659,7 +662,7 @@ static int do_symlink(const struct context *context,
 
 	target = cJSON_GetObjectItemCaseSensitive(node, "target");
 	if (!cJSON_IsString(target)) {
-		fprintf(stderr, "symlink '%s' missing 'target'\n", node->string);
+		error("symlink '%s' missing 'target'\n", node->string);
 		return -EINVAL;
 	}
 
@@ -693,7 +696,7 @@ static int add_file(const struct context *context,
 	apply_xattrs(entry, entity_context);
 
 	if (archive_write_header(context->tarball, entry) != ARCHIVE_OK) {
-		fprintf(stderr, "Failed to add file\n");
+		error("Failed to add file\n");
 		return -1;
 	}
 
@@ -736,7 +739,7 @@ static int get_source_path(const struct context *context,
 	source = cJSON_GetObjectItemCaseSensitive(node, "source");
 	if (source) {
 		if (!cJSON_IsString(source)) {
-			fprintf(stderr, "source for %s is not a string\n", node->string);
+			error("source for %s is not a string\n", node->string);
 			return -EINVAL;
 		}
 		*result = source->valuestring;
@@ -749,7 +752,7 @@ static int get_source_path(const struct context *context,
 		return 0;
 	}
 
-	fprintf(stderr, "file '%s' missing 'source' and no pattern specified?\n", node->string);
+	error("file '%s' missing 'source' and no pattern specified?\n", node->string);
 
 	return -EINVAL;
 }
@@ -776,7 +779,7 @@ static int do_regular(const struct context *context,
 
 	f = fopen(source_path, "rb");
 	if (!f) {
-		fprintf(stderr, "failed to open '%s'\n", source_path);
+		error("failed to open '%s'\n", source_path);
 		return -1;
 	}
 
@@ -926,7 +929,7 @@ static int do_device(const struct context *context,
 	minor = cJSON_GetObjectItemCaseSensitive(node, "minor");
 
 	if (!cJSON_IsNumber(major) || !cJSON_IsNumber(minor)) {
-		fprintf(stderr, "device '%s' missing 'major' or 'minor'\n", node->string);
+		error("device '%s' missing 'major' or 'minor'\n", node->string);
 		return -EINVAL;
 	}
 
@@ -986,7 +989,7 @@ static int traverse_entries(const struct context *context,
 
 		if (type) {
 			if (!cJSON_IsString(type)) {
-				fprintf(stderr, "Entry '%s' missing 'type'\n", node->string);
+				error("Entry '%s' missing 'type'\n", node->string);
 				return -EINVAL;
 			}
 			else
@@ -1023,7 +1026,7 @@ static int traverse_entries(const struct context *context,
 		}
 
 		if (!handled) {
-			fprintf(stderr, "Unknown type '%s'\n", type_str);
+			error("Unknown type '%s'\n", type_str);
 			return -EINVAL;
 		}
 	}
@@ -1103,7 +1106,7 @@ int main(int argc, char **argv)
 	archive_write_set_options(tarball, "xattrheader=SCHILY");
 
 	if (archive_write_open_filename(tarball, output) != ARCHIVE_OK) {
-		fprintf(stderr, "failed to open output: %s\n", archive_error_string(tarball));
+		error("failed to open output: %s\n", archive_error_string(tarball));
 		return 1;
 	}
 
