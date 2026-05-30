@@ -79,7 +79,7 @@ the current directory. The path can contain `/` and you don't need to describe
 the entire tree but how this works isn't entirely worked out yet. You might
 not get the results you expect.
 
-Every entry supports these common fields:
+Every entity supports these common fields:
 
 | Field   | Description                                                                |
 |---------|----------------------------------------------------------------------------|
@@ -111,5 +111,81 @@ fallback `user`, `group`, and `mode` for all children.
             "source": "mypasswordbinary.elf"
         }
     }
+}
+```
+
+### `regular`
+
+A regular file. The source file is read from the basedir (`-b`).
+
+| Field    | Required | Description                                         |
+|----------|----------|-----------------------------------------------------|
+| `source` | yes*     | Path to source file, relative to `-b <basedir>`     |
+
+\* If `-p <pattern>` is given, `source` may be omitted and the path is derived
+from the pattern with the entity key. This is very wonky and how it works might
+be changed later. 
+
+```json
+"usr/bin/kewlprog": {
+    "type":   "regular",
+    "source": "usr/bin/kewlprog",
+    "mode":   "0755",
+    "user":   "root",
+    "group":  "root"
+}
+```
+
+### `symlink`
+
+A symbolic link.
+
+| Field    | Required | Description          |
+|----------|----------|----------------------|
+| `target` | yes      | The symlink target   |
+
+```json
+"usr/bin/notkewlprog": {
+    "type":   "symlink",
+    "target": "/opt/prog"
+}
+```
+
+### `fifo`
+
+A named pipe. I have no idea what these would be needed for
+but here they are.
+
+```json
+"run/pipeymcpipeface": {
+    "type":  "fifo",
+    "user":  "root",
+    "group": "root",
+    "mode":  "0600"
+}
+```
+
+### `char` / `block`
+
+A character or block device node.
+
+| Field   | Required | Description         |
+|---------|----------|---------------------|
+| `major` | yes      | Major device number |
+| `minor` | yes      | Minor device number |
+
+```json
+"dev/null": {
+    "type":  "char",
+    "major": 1,
+    "minor": 3,
+    "mode":  "0666"
+},
+"dev/sda": {
+    "type":  "block",
+    "major": 8,
+    "minor": 0,
+    "mode":  "0660",
+    "group": "disk"
 }
 ```
