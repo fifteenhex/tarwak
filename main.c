@@ -41,6 +41,8 @@ struct group_map {
 
 struct context {
 	const char *pattern;
+	const char **features;
+	unsigned int numfeatures;
 	time_t start_time;
 	struct user_map *usermap;
 	unsigned int numusers;
@@ -191,7 +193,7 @@ static inline long file_len(FILE *f)
 
 static void usage(const char *prog)
 {
-	error("usage: %s -i <input> -o <output> -b <basedir> -p <pattern>\n", prog);
+	error("usage: %s -i <input> -o <output> -b <basedir> -p <pattern> [-f <feature>]...\n", prog);
 }
 
 static int __must_check parse_users(const cJSON *config, struct user_map **usermap, int *numusers)
@@ -1072,10 +1074,21 @@ int main(int argc, char **argv)
 	int opt, ret, numusers, numgroups;
 	const char *defaultgroup = NULL;
 	const char *defaultuser = NULL;
+	const char **features = NULL;
+	unsigned int numfeatures = 0;
 	const cJSON *entities;
 	cJSON *config_json;
 
-	while ((opt = getopt(argc, argv, "i:o:b:p:")) != -1) {
+	/*
+	 * You can't have more features than arguments so the cap
+	 * for the list is the number arguments.
+	 */
+
+	features = calloc(argc, sizeof(*features));
+	if (!features)
+		return 1;
+
+	while ((opt = getopt(argc, argv, "i:o:b:p:f:")) != -1) {
 		switch (opt) {
 		case 'i':
 			input = optarg;
@@ -1088,6 +1101,9 @@ int main(int argc, char **argv)
 			break;
 		case 'p':
 			pattern = optarg;
+			break;
+		case 'f':
+			features[numfeatures++] = optarg;
 			break;
 		default:
 			usage(argv[0]);
@@ -1151,6 +1167,8 @@ int main(int argc, char **argv)
 	context.groupmap = groupmap;
 	context.numgroups = numgroups;
 	context.pattern = pattern;
+	context.features = features;
+	context.numfeatures = numfeatures;
 	context.tarball = tarball;
 
 	/* Setup defaults */
