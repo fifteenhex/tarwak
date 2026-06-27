@@ -994,6 +994,65 @@ static const struct entry_handler entry_handlers[] = {
 	{ "block", do_block },
 };
 
+/* Is this feature switched on for this run? */
+static bool has_feature(const struct context *context, const char *name)
+{
+	unsigned int i;
+
+	for (i = 0; i < context->numfeatures; i++)
+		if (strcmp(context->features[i], name) == 0)
+			return true;
+
+	return false;
+}
+
+/*
+ * Work out if an entity should go in the tarball. If it has no
+ * "feature" key it always goes in, so the base layout just works like
+ * it always did. With a key we only pack it when one of the named
+ * features was switched on with -f. A plain string is a single feature,
+ * a list means any one of them will do.
+ */
+static int __must_check entity_enabled(const struct context *context,
+				       const cJSON *node, bool *enabled)
+{
+	const cJSON *feature;
+	const cJSON *item;
+
+	feature = cJSON_GetObjectItemCaseSensitive(node, "feature");
+
+	/* No feature on it, so it always goes in */
+	if (!feature) {
+		*enabled = true;
+		return 0;
+	}
+
+	/* A single feature, pack it if that one is on */
+	if (cJSON_IsString(feature)) {
+		*enabled = has_feature(context, feature->valuestring);
+		return 0;
+	}
+
+	/* A list, any one of them being on is enough */
+	if (cJSON_IsArray(feature)) {
+		*enabled = false;
+		cJSON_ArrayForEach(item, feature) {
+			if (!cJSON_IsString(item)) {
+				error("feature list for '%s' has a non string entry\n", node->string);
+				return -EINVAL;
+			}
+			if (has_feature(context, item->valuestring)) {
+				*enabled = true;
+				break;
+			}
+		}
+		return 0;
+	}
+
+	error("'feature' for '%s' should be a string or a list of strings\n", node->string);
+	return -EINVAL;
+}
+
 static int traverse_entities(const struct context *context,
 			    const struct directory_context *directory_context)
 {
@@ -1008,6 +1067,17 @@ static int traverse_entities(const struct context *context,
 			.node = node,
 		};
 		bool handled = false;
+		bool enabled = false;
+
+		/* Drop anything that a feature has switched off */
+		ret = entity_enabled(context, node, &enabled);
+		if (ret)
+			return ret;
+
+		if (!enabled) {
+			printf("%s (skipped, feature off)\n", node->string);
+			continue;
+		}
 
 		type = cJSON_GetObjectItemCaseSensitive(node, "type");
 

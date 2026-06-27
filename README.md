@@ -81,14 +81,54 @@ not get the results you expect.
 
 Every entity supports these common fields:
 
-| Field   | Description                                                                |
-|---------|----------------------------------------------------------------------------|
-| `type`  | Entry type (see below). Defaults to `regular` if omitted                   |
-| `user`  | Owner username. Falls back to directory default or global default          |
-| `group` | Owner group name. Falls back to directory default or global default        |
-| `mode`  | Octal permission string, e.g. `"0755"`                                     |
-| `mtime` | Modification time as `YYYY-MM-DDTHH:MM:SS`. Defaults to program start time |
-| `xattrs`| Extended attributes                                                        |
+| Field     | Description                                                                    |
+|-----------|--------------------------------------------------------------------------------|
+| `type`    | Entry type (see below). Defaults to `regular` if omitted                       |
+| `user`    | Owner username. Falls back to directory default or global default              |
+| `group`   | Owner group name. Falls back to directory default or global default            |
+| `mode`    | Octal permission string, e.g. `"0755"`                                         |
+| `mtime`   | Modification time as `YYYY-MM-DDTHH:MM:SS`. Defaults to program start time     |
+| `xattrs`  | Extended attributes                                                            |
+| `feature` | Only pack this entity when a matching feature is on. See [Features](#features) |
+
+### Features
+
+Sometimes you want one config to spit out slightly different tarballs.
+Maybe one build wants the debug tools in it and another doesn't. That
+is what features are for.
+
+Any entity can have a `feature` field. If it does, the entity only
+gets packed when that feature was switched on with `-f` on the command
+line. Entities without a `feature` field are always packed, so your
+base layout just works like it always did.
+
+```json
+"usr/bin/gdb": {
+    "source":  "usr/bin/gdb",
+    "feature": "debug"
+}
+```
+
+Now `-f debug` pulls `gdb` in and leaving it off drops it. You can
+pass `-f` as many times as you like to turn on more than one feature:
+
+```
+tarwak -i config.json -o out.tar -b ./files -f debug -f net
+```
+
+If an entity should show up for any one of a few features, use a list
+instead of a single string. Any match is enough to pack it.
+
+```json
+"usr/bin/busybox": {
+    "source":  "usr/bin/busybox",
+    "feature": ["debug", "rescue"]
+}
+```
+
+If you put a `feature` on a `dir` and that feature is off, everything
+inside the directory gets dropped along with it, so you don't have to
+tag every single child.
 
 ### `dir`
 
