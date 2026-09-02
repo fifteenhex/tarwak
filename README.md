@@ -88,8 +88,36 @@ Every entity supports these common fields:
 | `group`   | Owner group name. Falls back to directory default or global default            |
 | `mode`    | Octal permission string, e.g. `"0755"`                                         |
 | `mtime`   | Modification time as `YYYY-MM-DDTHH:MM:SS`. Defaults to program start time     |
-| `xattrs`  | Extended attributes                                                            |
+| `xattrs`  | Extended attributes. See [Extended attributes](#extended-attributes)           |
 | `feature` | Only pack this entity when a matching feature is on. See [Features](#features) |
+
+### Extended attributes
+
+`xattrs` is a map of attribute name to value. A string is the value
+itself.
+
+```json
+"usr/bin/kewlprog": {
+    "xattrs": {
+        "user.comment": "wrote this on a friday"
+    }
+}
+```
+
+A path relative to basedir can also be used via `source`.
+
+```json
+"bin/ping": {
+    "source": "ping",
+    "xattrs": {
+        "user.man": { "source": "man/ping.txt" }
+    }
+}
+```
+
+`security.capability` is a special case. The value is a capability
+string like `"cap_net_raw+ep"` that tarwak internally converts to
+the correct binary format.
 
 ### Features
 

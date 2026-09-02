@@ -1,0 +1,16 @@
+{
+    "root": {
+        "entities": {
+            "usr/bin/ping": {
+                "type": "regular",
+                "source": "ping",
+                "mode": "0755",
+                "xattrs": {
+                    "security.capability": "cap_net_raw+ep",
+                    "user.comment": "Can you see, I am sushi",
+                    "user.man": { "source": "manpage" }
+                }
+            }
+        }
+    }
+}

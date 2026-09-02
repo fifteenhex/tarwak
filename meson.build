@@ -47,9 +47,13 @@ endforeach
 test_config_ping_sec_cap = test_configs / 'ping-sec-cap.json'
 test_output_ping_sec_cap = meson.project_build_root() / 'ping-sec-cap.tar'
 
+test_config_xattrs = test_configs / 'xattrs.json'
+test_output_xattrs = meson.project_build_root() / 'xattrs.tar'
+
 test_cases = [
     ['simple', test_config_simple, test_output_simple],
     ['ping_sec_cap', test_config_ping_sec_cap, test_output_ping_sec_cap],
+    ['xattrs', test_config_xattrs, test_output_xattrs],
 ]
 
 foreach case : test_cases

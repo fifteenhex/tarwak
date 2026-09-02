@@ -74,12 +74,24 @@ struct metadata {
 	time_t ts;
 };
 
+struct xattr {
+	const char *name;
+	void *value;
+	size_t len;
+	bool owned;
+};
+
+#define MAX_XATTRS 8
+
 /* Holder for properties we'll apply to entities */
 struct entity_context {
 	struct metadata properties;
 
 	bool have_cap;
 	struct vfs_cap_data cap;
+
+	struct xattr xattrs[MAX_XATTRS];
+	unsigned num_xattrs;
 
 	const cJSON *node;
 };
@@ -577,6 +589,44 @@ static void apply_metadata(struct archive_entry *entry,
 
 #define XATTR_SEC_CAP "security.capability"
 
+static int __must_check read_xattr_source(const cJSON *xattr, struct xattr *out)
+{
+	FILE __cleanup_file *f = NULL;
+	const cJSON *source;
+	void *buf;
+	long len;
+
+	source = cJSON_GetObjectItemCaseSensitive(xattr, "source");
+	if (!cJSON_IsString(source)) {
+		error("xattr %s has no source to read\n", xattr->string);
+		return -EINVAL;
+	}
+
+	f = fopen(source->valuestring, "rb");
+	if (!f) {
+		error("failed to open '%s'\n", source->valuestring);
+		return -1;
+	}
+
+	len = file_len(f);
+
+	buf = malloc(len);
+	if (!buf)
+		return -ENOMEM;
+
+	if (fread(buf, 1, len, f) != (size_t) len) {
+		error("failed to read '%s'\n", source->valuestring);
+		free(buf);
+		return -1;
+	}
+
+	out->value = buf;
+	out->len = len;
+	out->owned = true;
+
+	return 0;
+}
+
 static int __must_check parse_xattrs(const cJSON *node, struct entity_context *entity_context)
 {
 	const cJSON *xattrs;
@@ -593,15 +643,22 @@ static int __must_check parse_xattrs(const cJSON *node, struct entity_context *e
 		return -EINVAL;
 
 	cJSON_ArrayForEach(xattr, xattrs) {
-		if (!cJSON_IsString(xattr))
-			continue;
+		struct xattr *out;
 
 		/* Security caps are a special case and should be an array that is
 		 * smushed into one xattr? This will be broken for multiple caps
 		 * right now but I just want the cap for ping as normal user right now.
 		 */
 		if (strcmp(xattr->string, XATTR_SEC_CAP) == 0) {
-			const char *cap = xattr->valuestring;
+			const char *cap;
+
+			if (!cJSON_IsString(xattr)) {
+				error("%s for %s is not a string\n",
+				      XATTR_SEC_CAP, node->string);
+				return -EINVAL;
+			}
+
+			cap = xattr->valuestring;
 
 			error("Adding security capability: %s\n", cap);
 			ret = encode_capability(cap, &entity_context->cap);
@@ -609,29 +666,68 @@ static int __must_check parse_xattrs(const cJSON *node, struct entity_context *e
 				return ret;
 
 			entity_context->have_cap = true;
+			continue;
 		}
-		/* Normal xattrs */
-		else {
 
+		/* Normal xattrs */
+		if (entity_context->num_xattrs == MAX_XATTRS) {
+			error("Too many xattrs on %s\n", node->string);
+			return -EINVAL;
 		}
+
+		out = &entity_context->xattrs[entity_context->num_xattrs];
+		out->name = xattr->string;
+
+		/* xattr can be a string that is used as-is or an object */
+		if (cJSON_IsString(xattr)) {
+			out->value = xattr->valuestring;
+			out->len = strlen(xattr->valuestring);
+			out->owned = false;
+		} else if (cJSON_IsObject(xattr)) {
+			ret = read_xattr_source(xattr, out);
+			if (ret)
+				return ret;
+		} else {
+			error("xattr %s on %s is not a string or an object\n",
+			      xattr->string, node->string);
+			return -EINVAL;
+		}
+
+		entity_context->num_xattrs++;
 	}
 
 	return 0;
 }
 
+static void free_xattrs(struct entity_context *entity_context)
+{
+	unsigned i;
+
+	for (i = 0; i < entity_context->num_xattrs; i++)
+		if (entity_context->xattrs[i].owned)
+			free(entity_context->xattrs[i].value);
+
+	entity_context->num_xattrs = 0;
+}
+
+#define __cleanup_xattrs __attribute__((cleanup(free_xattrs)))
+
 static void apply_xattrs(struct archive_entry *entry, const struct entity_context *entity_context)
 {
+	unsigned i;
+
 	if (entity_context->have_cap) {
 		const struct vfs_cap_data *cap = &entity_context->cap;
 
 		archive_entry_xattr_add_entry(entry, XATTR_SEC_CAP, cap, sizeof(*cap));
 	}
 
-#if 0
-	archive_entry_xattr_add_entry(entry, xattr->string,
-				xattr->valuestring,
-				strlen(xattr->valuestring));
-#endif
+	for (i = 0; i < entity_context->num_xattrs; i++) {
+		const struct xattr *xattr = &entity_context->xattrs[i];
+
+		archive_entry_xattr_add_entry(entry, xattr->name,
+					      xattr->value, xattr->len);
+	}
 }
 
 static struct archive_entry __must_check *start_entity(const char *path, unsigned int type)
@@ -1063,7 +1159,7 @@ static int traverse_entities(const struct context *context,
 	int i;
 
 	cJSON_ArrayForEach(node, directory_context->entities) {
-		struct entity_context entity_context = {
+		struct entity_context __cleanup_xattrs entity_context = {
 			.node = node,
 		};
 		bool handled = false;
