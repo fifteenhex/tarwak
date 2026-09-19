@@ -5,6 +5,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 #include <archive.h>
@@ -14,6 +15,11 @@
 #include "config.h"
 
 #define READ_BLOCK (1024 * 1024)
+
+struct unknown {
+	const char *what;
+	char *name;
+};
 
 struct munge {
 	struct user_map *usermap;
@@ -25,6 +31,10 @@ struct munge {
 	const char *default_group;
 	uid_t default_uid;
 	gid_t default_gid;
+
+	struct unknown *unknown;
+	unsigned int numunknown;
+	unsigned int maxunknown;
 
 	void *buff;
 };
@@ -51,6 +61,41 @@ static struct archive *open_tarball(const char *path)
 	return a;
 }
 
+static void warn_once(struct munge *munge, const char *what, const char *name,
+		      const char *instead)
+{
+	struct unknown *grown;
+	unsigned int i;
+
+	for (i = 0; i < munge->numunknown; i++)
+		if (strcmp(munge->unknown[i].what, what) == 0 &&
+		    strcmp(munge->unknown[i].name, name) == 0)
+			return;
+
+	if (munge->numunknown == munge->maxunknown) {
+		unsigned int want = munge->maxunknown ? munge->maxunknown * 2 : 16;
+
+		grown = realloc(munge->unknown, want * sizeof(*grown));
+		if (!grown)
+			return;
+
+		munge->unknown = grown;
+		munge->maxunknown = want;
+	}
+
+	grown = &munge->unknown[munge->numunknown];
+
+	grown->name = strdup(name);
+	if (!grown->name)
+		return;
+
+	grown->what = what;
+	munge->numunknown++;
+
+	error("tarmunge: no %s '%s' in the config, using '%s'\n", what, name,
+	      instead);
+}
+
 /* Apply the config's ownership settings */
 static void set_owner(struct munge *munge, struct archive_entry *entry)
 {
@@ -61,12 +106,18 @@ static void set_owner(struct munge *munge, struct archive_entry *entry)
 
 	if (!uname || !*uname ||
 	    lookup_uid(munge->usermap, munge->numusers, uname, &uid)) {
+		if (uname && *uname)
+			warn_once(munge, "user", uname, munge->default_user);
+
 		uname = munge->default_user;
 		uid = munge->default_uid;
 	}
 
 	if (!gname || !*gname ||
 	    lookup_gid(munge->groupmap, munge->numgroups, gname, &gid)) {
+		if (gname && *gname)
+			warn_once(munge, "group", gname, munge->default_group);
+
 		gname = munge->default_group;
 		gid = munge->default_gid;
 	}
