@@ -16,6 +16,31 @@
 
 #define READ_BLOCK (1024 * 1024)
 
+#define PATH_MAXLEN 4096
+
+/* Avoid issues with different strings for the same effective path */
+static const char *normalise(const char *path, char *buf, size_t len)
+{
+	size_t end;
+
+	while (path[0] == '.' && path[1] == '/')
+		path += 2;
+
+	while (path[0] == '/')
+		path++;
+
+	if ((size_t)snprintf(buf, len, "/%s", path) >= len) {
+		error("path too long: '%s'\n", path);
+		return NULL;
+	}
+
+	end = strlen(buf);
+	while (end > 1 && buf[end - 1] == '/')
+		buf[--end] = '\0';
+
+	return buf;
+}
+
 struct unknown {
 	const char *what;
 	char *name;
@@ -160,11 +185,20 @@ static int __must_check process_one(struct munge *munge, const char *path,
 		return -1;
 
 	while (archive_read_next_header(a, &entry) == ARCHIVE_OK) {
+		char buf[PATH_MAXLEN];
+		const char *name;
+
+		name = normalise(archive_entry_pathname(entry), buf, sizeof(buf));
+		if (!name) {
+			ret = -1;
+			break;
+		}
+
+		archive_entry_set_pathname(entry, name);
 		set_owner(munge, entry);
 
 		if (archive_write_header(out, entry) != ARCHIVE_OK) {
-			error("failed to write header for '%s': %s\n",
-			      archive_entry_pathname(entry),
+			error("failed to write header for '%s': %s\n", name,
 			      archive_error_string(out));
 			ret = -1;
 			break;
