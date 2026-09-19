@@ -41,6 +41,12 @@ static const char *normalise(const char *path, char *buf, size_t len)
 	return buf;
 }
 
+struct effective_file {
+	char *path;
+	unsigned int file;
+	unsigned long ordinal;
+};
+
 struct unknown {
 	const char *what;
 	char *name;
@@ -56,6 +62,10 @@ struct munge {
 	const char *default_group;
 	uid_t default_uid;
 	gid_t default_gid;
+
+	struct effective_file *effectives;
+	unsigned int numeffectives;
+	unsigned int maxeffectives;
 
 	struct unknown *unknown;
 	unsigned int numunknown;
@@ -84,6 +94,48 @@ static struct archive *open_tarball(const char *path)
 	}
 
 	return a;
+}
+
+static int __must_check on_file_seen(struct munge *munge, const char *path,
+				     unsigned int file, unsigned long ordinal)
+{
+	struct effective_file *ef;
+	unsigned int i;
+
+	for (i = 0; i < munge->numeffectives; i++) {
+		if (strcmp(munge->effectives[i].path, path) == 0) {
+			munge->effectives[i].file = file;
+			munge->effectives[i].ordinal = ordinal;
+			return 0;
+		}
+	}
+
+	if (munge->numeffectives == munge->maxeffectives) {
+		unsigned int want = munge->maxeffectives ?
+				    munge->maxeffectives * 2 : 256;
+
+		ef = realloc(munge->effectives, want * sizeof(*ef));
+		if (!ef) {
+			error("out of room for %u paths\n", want);
+			return -1;
+		}
+
+		munge->effectives = ef;
+		munge->maxeffectives = want;
+	}
+
+	ef = &munge->effectives[munge->numeffectives++];
+
+	ef->path = strdup(path);
+	if (!ef->path) {
+		error("out of room for '%s'\n", path);
+		return -1;
+	}
+
+	ef->file = file;
+	ef->ordinal = ordinal;
+
+	return 0;
 }
 
 static void warn_once(struct munge *munge, const char *what, const char *name,
@@ -151,6 +203,39 @@ static void set_owner(struct munge *munge, struct archive_entry *entry)
 	archive_entry_set_uname(entry, uname);
 	archive_entry_set_gid(entry, gid);
 	archive_entry_set_gname(entry, gname);
+}
+
+/* Work out work file will actually end up in the output */
+static int __must_check map_effectives(struct munge *munge, const char *path,
+				       unsigned int file)
+{
+	struct archive *a;
+	struct archive_entry *entry;
+	unsigned long ordinal = 0;
+	int ret = 0;
+
+	a = open_tarball(path);
+	if (!a)
+		return -1;
+
+	while (archive_read_next_header(a, &entry) == ARCHIVE_OK) {
+		char buf[PATH_MAXLEN];
+		const char *name;
+
+		name = normalise(archive_entry_pathname(entry), buf, sizeof(buf));
+		if (!name) {
+			ret = -1;
+			break;
+		}
+
+		ret = on_file_seen(munge, name, file, ordinal++);
+		if (ret)
+			break;
+	}
+
+	archive_read_free(a);
+
+	return ret;
 }
 
 static int __must_check copy_data(struct munge *munge, struct archive *in,
@@ -283,6 +368,12 @@ int main(int argc, char **argv)
 		error("no group '%s' in the config to default to\n",
 		      munge.default_group);
 		return 1;
+	}
+
+	for (i = 0; optind + (int)i < argc; i++) {
+		ret = map_effectives(&munge, argv[optind + i], i);
+		if (ret)
+			return 1;
 	}
 
 	out = archive_write_new();
