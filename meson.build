@@ -10,6 +10,12 @@ tarwak = executable(
     dependencies: [libarchive, libcjson, libcap],
 )
 
+tarmunge = executable(
+    'tarmunge',
+    'tarmunge.c',
+    dependencies: [libarchive, libcjson],
+)
+
 test_files = meson.project_source_root() / 'tests' / 'files'
 test_configs = meson.project_source_root() / 'tests' / 'configs'
 test_config_simple = test_configs / 'simple.json'
@@ -59,3 +65,5 @@ test_cases = [
 foreach case : test_cases
     test(case[0], tarwak, args: ['-i', case[1], '-o', case[2], '-b', test_files])
 endforeach
+
+test('munge-args-none', tarmunge, args: [], should_fail: true)
