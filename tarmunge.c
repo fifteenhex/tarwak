@@ -9,12 +9,23 @@
 
 #include <archive.h>
 #include <archive_entry.h>
+#include <cjson/cJSON.h>
 
 #include "config.h"
 
 #define READ_BLOCK (1024 * 1024)
 
 struct munge {
+	struct user_map *usermap;
+	int numusers;
+	struct group_map *groupmap;
+	int numgroups;
+
+	const char *default_user;
+	const char *default_group;
+	uid_t default_uid;
+	gid_t default_gid;
+
 	void *buff;
 };
 
@@ -38,6 +49,32 @@ static struct archive *open_tarball(const char *path)
 	}
 
 	return a;
+}
+
+/* Apply the config's ownership settings */
+static void set_owner(struct munge *munge, struct archive_entry *entry)
+{
+	const char *uname = archive_entry_uname(entry);
+	const char *gname = archive_entry_gname(entry);
+	uid_t uid;
+	gid_t gid;
+
+	if (!uname || !*uname ||
+	    lookup_uid(munge->usermap, munge->numusers, uname, &uid)) {
+		uname = munge->default_user;
+		uid = munge->default_uid;
+	}
+
+	if (!gname || !*gname ||
+	    lookup_gid(munge->groupmap, munge->numgroups, gname, &gid)) {
+		gname = munge->default_group;
+		gid = munge->default_gid;
+	}
+
+	archive_entry_set_uid(entry, uid);
+	archive_entry_set_uname(entry, uname);
+	archive_entry_set_gid(entry, gid);
+	archive_entry_set_gname(entry, gname);
 }
 
 static int __must_check copy_data(struct munge *munge, struct archive *in,
@@ -72,6 +109,8 @@ static int __must_check process_one(struct munge *munge, const char *path,
 		return -1;
 
 	while (archive_read_next_header(a, &entry) == ARCHIVE_OK) {
+		set_owner(munge, entry);
+
 		if (archive_write_header(out, entry) != ARCHIVE_OK) {
 			error("failed to write header for '%s': %s\n",
 			      archive_entry_pathname(entry),
@@ -97,6 +136,7 @@ int main(int argc, char **argv)
 	struct munge munge = { 0 };
 	const char *output = NULL;
 	const char *input = NULL;
+	cJSON *config = NULL;
 	struct archive *out;
 	unsigned int i;
 	int ret;
@@ -124,6 +164,39 @@ int main(int argc, char **argv)
 	munge.buff = malloc(READ_BLOCK);
 	if (!munge.buff) {
 		error("no room for a copy buffer\n");
+		return 1;
+	}
+
+	ret = parse_config(input, &config);
+	if (ret)
+		return 1;
+
+	ret = parse_users(config, &munge.usermap, &munge.numusers);
+	if (ret)
+		return 1;
+
+	ret = parse_groups(config, &munge.groupmap, &munge.numgroups);
+	if (ret)
+		return 1;
+
+	munge.default_user = "root";
+	munge.default_group = "root";
+
+	ret = parse_defaults(config, &munge.default_user, &munge.default_group);
+	if (ret)
+		return 1;
+
+	if (lookup_uid(munge.usermap, munge.numusers, munge.default_user,
+		       &munge.default_uid)) {
+		error("no user '%s' in the config to default to\n",
+		      munge.default_user);
+		return 1;
+	}
+
+	if (lookup_gid(munge.groupmap, munge.numgroups, munge.default_group,
+		       &munge.default_gid)) {
+		error("no group '%s' in the config to default to\n",
+		      munge.default_group);
 		return 1;
 	}
 

@@ -67,3 +67,9 @@ foreach case : test_cases
 endforeach
 
 test('munge-args-none', tarmunge, args: [], should_fail: true)
+test(
+    'munge-args-no-tarballs',
+    tarmunge,
+    args: ['-i', test_config_simple, '-o', meson.project_build_root() / 'munge.tar'],
+    should_fail: true,
+)
