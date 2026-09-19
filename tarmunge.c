@@ -3,6 +3,7 @@
  * tarball conbiner
  */
 
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -138,6 +139,19 @@ static int __must_check on_file_seen(struct munge *munge, const char *path,
 	return 0;
 }
 
+static bool is_effective_file(const struct munge *munge, const char *path,
+		 unsigned int file, unsigned long ordinal)
+{
+	unsigned int i;
+
+	for (i = 0; i < munge->numeffectives; i++)
+		if (strcmp(munge->effectives[i].path, path) == 0)
+			return munge->effectives[i].file == file &&
+			       munge->effectives[i].ordinal == ordinal;
+
+	return false;
+}
+
 static void warn_once(struct munge *munge, const char *what, const char *name,
 		      const char *instead)
 {
@@ -259,10 +273,11 @@ static int __must_check copy_data(struct munge *munge, struct archive *in,
 }
 
 static int __must_check process_one(struct munge *munge, const char *path,
-				    struct archive *out)
+				    unsigned int file, struct archive *out)
 {
 	struct archive *a;
 	struct archive_entry *entry;
+	unsigned long ordinal = 0;
 	int ret = 0;
 
 	a = open_tarball(path);
@@ -278,6 +293,9 @@ static int __must_check process_one(struct munge *munge, const char *path,
 			ret = -1;
 			break;
 		}
+
+		if (!is_effective_file(munge, name, file, ordinal++))
+			continue;
 
 		archive_entry_set_pathname(entry, name);
 		set_owner(munge, entry);
@@ -389,7 +407,7 @@ int main(int argc, char **argv)
 
 	/* Copy the contents of each tarball into the output */
 	for (i = 0; optind + (int)i < argc; i++) {
-		ret = process_one(&munge, argv[optind + i], out);
+		ret = process_one(&munge, argv[optind + i], i, out);
 		if (ret)
 			return 1;
 	}
